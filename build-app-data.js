@@ -7,9 +7,10 @@ const {
 } = require('./sim');
 const { RANK_121_200, REAL_EXTRA } = require('./data/players');
 const {
-  pointsWithTies, owgrTableFor, champTableFor, simulateRoundScore, cutSizeFor,
+  pointsWithTies, owgrTableFor, champTableFor, simulateRoundHoles, cutSizeFor,
   OWGR_MAJOR, OWGR_REGULAR, CHAMP_REGULAR, CHAMP_SIGNATURE, CHAMP_MAJOR,
 } = require('./points');
+const sumHoles = (holes) => holes.reduce((a, b) => a + b, 0);
 
 const SEED = 20280101;
 const rng = makeRng(SEED);
@@ -33,14 +34,16 @@ function pgaBefore() { return sortedByPgaPts(reg); }
 // then the real point tables (group decides which OWGR/Championship curve
 // applies) — missed-cut players score 0 either way, same as real golf.
 function simulateTournament(field, group, cutSize) {
+  // Each player's round is stored as the 18 individual hole results (to-par)
+  // — the same shape a hand-entered round takes — not a single pre-summed number.
   function rollRound(players) {
     const m = {};
-    players.forEach((p) => { m[p.name] = simulateRoundScore(rng); });
+    players.forEach((p) => { m[p.name] = simulateRoundHoles(rng); });
     return m;
   }
   const r1 = rollRound(field);
   const r2 = rollRound(field);
-  const thru2 = field.map((p) => ({ p, total: r1[p.name] + r2[p.name] }))
+  const thru2 = field.map((p) => ({ p, total: sumHoles(r1[p.name]) + sumHoles(r2[p.name]) }))
     .sort((a, b) => a.total - b.total || a.p.name.localeCompare(b.p.name));
   const cutValue = thru2.length > cutSize ? thru2[cutSize - 1].total : Infinity;
   const madeCut = thru2.filter((x) => x.total <= cutValue).map((x) => x.p);
@@ -48,7 +51,7 @@ function simulateTournament(field, group, cutSize) {
 
   const r3 = rollRound(madeCut);
   const r4 = rollRound(madeCut);
-  const standings = madeCut.map((p) => ({ p, total: r1[p.name] + r2[p.name] + r3[p.name] + r4[p.name] }))
+  const standings = madeCut.map((p) => ({ p, total: sumHoles(r1[p.name]) + sumHoles(r2[p.name]) + sumHoles(r3[p.name]) + sumHoles(r4[p.name]) }))
     .sort((a, b) => a.total - b.total || a.p.name.localeCompare(b.p.name));
 
   const owgrTable = owgrTableFor(group);
@@ -152,6 +155,9 @@ const appData = {
   championshipRosterSize: 120,
   backgroundPool: fieldOut([...RANK_121_200, ...REAL_EXTRA].map(([n]) => reg.byName.get(n))).map((p, i) => Object.assign({ rank: 121 + i }, p)),
   seedScores,
+  // The seeded results are already-finished tournaments — ship them pre-locked
+  // so the client doesn't show an editable, unlocked Pebble Beach/Masters.
+  seedLocked: Object.fromEntries(Object.keys(seedScores).map((key) => [key, { r1: true, r2: true, r3: true, r4: true }])),
   startingOwgr,
   pointTables: { owgrMajor: OWGR_MAJOR, owgrRegular: OWGR_REGULAR, champRegular: CHAMP_REGULAR, champSignature: CHAMP_SIGNATURE, champMajor: CHAMP_MAJOR },
 };

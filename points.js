@@ -110,18 +110,25 @@ function dieBag(die) {
 }
 const DICE_BAGS = DICE.map(dieBag);
 
-function simulateRoundScore(rng) {
-  let total = 0;
+// Returns the 18 individual hole results (to-par), so seeded rounds are
+// stored the same shape as a hand-entered round — a 2028 aggregate wouldn't
+// tell the story of any specific hole.
+function simulateRoundHoles(rng) {
+  const holes = new Array(18);
   for (let h = 0; h < 18; h++) {
     const bag = DICE_BAGS[Math.floor(rng() * DICE_BAGS.length)];
     const face = bag[Math.floor(rng() * bag.length)];
-    total += FACE_TO_STROKES[face];
+    holes[h] = FACE_TO_STROKES[face];
   }
-  return total;
+  return holes;
+}
+function simulateRoundScore(rng) {
+  return simulateRoundHoles(rng).reduce((a, b) => a + b, 0);
 }
 
 module.exports = {
   OWGR_MAJOR, OWGR_REGULAR, CHAMP_REGULAR, CHAMP_SIGNATURE, CHAMP_MAJOR,
-  pointsForRank, pointsWithTies, owgrTableFor, champTableFor, realWorldOwgr, simulateRoundScore, DICE,
+  pointsForRank, pointsWithTies, owgrTableFor, champTableFor, realWorldOwgr,
+  simulateRoundScore, simulateRoundHoles, DICE,
   CUT_SIZES, cutSizeFor,
 };

@@ -84,7 +84,11 @@
   td.ctry{ font-family:'IBM Plex Mono',monospace; font-size:0.7rem; color:var(--ink-faint); text-transform:uppercase; }
   td.num{ text-align:center; }
   td.rk{ font-family:'IBM Plex Mono',monospace; color:var(--accent-strong); font-weight:600; width:36px; }
-  .score-input{ width:56px; text-align:center; padding:5px 4px; }
+  .hole-input{ width:34px; text-align:center; padding:5px 2px; font-size:0.8rem; }
+  .hole-input:disabled{ background:var(--sand-soft); color:var(--ink-faint); border-color:transparent; }
+  th.hole-th{ text-align:center; padding-left:6px; padding-right:6px; }
+  .lock-row{ display:flex; align-items:center; gap:12px; }
+  .lock-status{ font-family:'IBM Plex Mono',monospace; font-size:0.78rem; color:var(--accent-strong); display:flex; align-items:center; gap:6px; }
   .score-total{ font-weight:700; }
   .score-total.good{ color:var(--good); }
   .score-total.bad{ color:var(--bad); }
@@ -164,7 +168,7 @@
   // ---------------- state ----------------
   function defaultState() {
     return {
-      scores: {}, roundSelections: { r1: null, r2: null, r3: null, r4: null }, diceLog: { d1: [], d2: [], d3: [], d4: [] },
+      scores: {}, roundLocked: {}, roundSelections: { r1: null, r2: null, r3: null, r4: null }, diceLog: { d1: [], d2: [], d3: [], d4: [] },
       challengerLog: [], challengerResults: [], challengerRefreshed: [],
     };
   }
@@ -195,6 +199,7 @@
   // returning visitor's own entered scores.
   if (Object.keys(STATE.scores).length === 0 && DATA.seedScores) {
     STATE.scores = JSON.parse(JSON.stringify(DATA.seedScores));
+    if (DATA.seedLocked) STATE.roundLocked = JSON.parse(JSON.stringify(DATA.seedLocked));
     saveState();
   }
   checkChallengerTriggers(); // catches anything already complete (e.g. the seeded Pebble Beach result)
@@ -224,16 +229,31 @@
     }
     return out;
   }
+  // A round is stored as 18 individual hole results (to-par); a player's
+  // round total only exists once all 18 are in. Reads a legacy plain-number
+  // round (from data saved before hole-by-hole entry existed) as-is.
+  function roundValue(tKey, n, name) {
+    const sc = STATE.scores[tKey];
+    if (!sc || !sc['r' + n]) return null;
+    const v = sc['r' + n][name];
+    if (v === undefined || v === null) return null;
+    if (Array.isArray(v)) {
+      if (v.length !== 18 || v.some(h => h === null || h === undefined)) return null;
+      return v.reduce((a, b) => a + b, 0);
+    }
+    return v;
+  }
+
   // A player "made the cut" if their round 1+2 total is within the
   // tournament's cut size (place + ties) — computed live off whoever
-  // currently has both rounds entered, so it firms up as scores come in.
+  // currently has both rounds fully entered, so it firms up as scores come in.
   function computeCut(tKey) {
     const t = byKey[tKey];
     const sc = STATE.scores[tKey];
-    if (!t || !sc || !sc.r1 || !sc.r2) return null;
+    if (!t || !sc) return null;
     const thru2 = t.field.map(p => {
-      const a = sc.r1[p.name], b = sc.r2[p.name];
-      return (a === undefined || a === null || b === undefined || b === null) ? null : { name: p.name, total: a + b };
+      const a = roundValue(tKey, 1, p.name), b = roundValue(tKey, 2, p.name);
+      return (a === null || b === null) ? null : { name: p.name, total: a + b };
     }).filter(Boolean);
     if (!thru2.length) return null;
     thru2.sort((a, b) => a.total - b.total);
@@ -248,16 +268,23 @@
   // A Championship Series tournament is "complete" once every player has a
   // round 1+2 total (so the cut is final, not just projected) and everyone
   // who made that final cut has both round 3 and round 4 in.
+  function isRoundLocked(tKey, n) {
+    return !!(STATE.roundLocked[tKey] && STATE.roundLocked[tKey]['r' + n]);
+  }
+  // "Complete" means rounds 1 and 2 are locked (so the cut is final) and
+  // rounds 3 and 4 are locked too (so everyone who made the cut has a real
+  // finish) — locking, not just filling every box, is what closes a round out.
   function isTournamentComplete(tKey) {
     const t = byKey[tKey];
     const sc = STATE.scores[tKey];
     if (!t || !sc) return false;
+    if (!isRoundLocked(tKey, 1) || !isRoundLocked(tKey, 2)) return false;
+    if (!isRoundLocked(tKey, 3) || !isRoundLocked(tKey, 4)) return false;
     const cut = computeCut(tKey);
     if (!cut || cut.enteredCount < t.field.length) return false;
     for (const p of t.field) {
       if (cut.missedCut.has(p.name)) continue;
-      const r3 = sc.r3 && sc.r3[p.name], r4 = sc.r4 && sc.r4[p.name];
-      if (r3 === undefined || r3 === null || r4 === undefined || r4 === null) return false;
+      if (roundValue(tKey, 3, p.name) === null || roundValue(tKey, 4, p.name) === null) return false;
     }
     return true;
   }
@@ -328,7 +355,7 @@
       const cut = computeCut(t.key);
       const rows = t.field.map(p => {
         if (cut && cut.missedCut.has(p.name)) return null; // 0 points, same as real golf
-        const rounds = [1, 2, 3, 4].map(n => sc['r' + n] ? sc['r' + n][p.name] : undefined).filter(v => v !== undefined && v !== null);
+        const rounds = [1, 2, 3, 4].map(n => roundValue(t.key, n, p.name)).filter(v => v !== null);
         return rounds.length ? { p, total: rounds.reduce((a, b) => a + b, 0) } : null;
       }).filter(Boolean);
       rows.sort((a, b) => a.total - b.total || a.p.name.localeCompare(b.p.name));
@@ -587,6 +614,14 @@
     return th;
   }
 
+  function parseHoleValue(raw) {
+    raw = raw.trim();
+    if (raw === '') return null;
+    if (/^e$/i.test(raw)) return 0;
+    if (/^[+-]?\d+$/.test(raw)) return parseInt(raw, 10);
+    return undefined; // invalid — caller should reject
+  }
+
   function renderRoundBody(domKey, n, tKey) {
     const body = document.getElementById('round-body-' + domKey);
     if (!tKey) { body.innerHTML = '<p class="view-note">Pick a tournament above to load its field.</p>'; return; }
@@ -605,19 +640,59 @@
     chips.innerHTML = `<span class="chip">${t.field.length} players</span><span class="chip">${t.dates}</span><span class="chip">cut: top ${t.cutSize || 65} &amp; ties</span>`;
     body.appendChild(chips);
     if (cut) body.appendChild(Object.assign(document.createElement('p'), { className: 'view-note', textContent: `Cut projected at ${fmtToPar(cut.cutValue) || 'E'} (${cut.enteredCount} of ${t.field.length} entered so far) — ${cut.missedCut.size} player(s) sitting outside the line.` }));
+
+    const lockRow = document.createElement('div');
+    lockRow.className = 'lock-row';
+    body.appendChild(lockRow);
+
     const tableHost = document.createElement('div');
     body.appendChild(tableHost);
 
+    function holesFor(name) {
+      let arr = roundScores[name];
+      if (!Array.isArray(arr) || arr.length !== 18) {
+        arr = new Array(18).fill(null);
+        roundScores[name] = arr;
+      }
+      return arr;
+    }
+    function needsThisRound(p) { return !(cut && cut.missedCut.has(p.name)); }
+    function roundComplete() {
+      return t.field.every(p => !needsThisRound(p) || holesFor(p.name).every(h => h !== null));
+    }
     function thruTotal(name) {
       let sum = 0, any = false;
       for (let i = 1; i <= n; i++) {
-        const v = STATE.scores[tKey]['r' + i][name];
-        if (v !== undefined && v !== null) { sum += v; any = true; }
+        const v = roundValue(tKey, i, name);
+        if (v !== null) { sum += v; any = true; }
       }
       return any ? sum : null;
     }
 
     function draw() {
+      const locked = isRoundLocked(tKey, n);
+      lockRow.innerHTML = '';
+      if (locked) {
+        lockRow.innerHTML = '<span class="lock-status">&#10003; Round locked in</span>';
+      } else {
+        const btn = document.createElement('button');
+        btn.className = 'btn primary';
+        btn.textContent = 'Enter — lock in Round ' + n;
+        btn.disabled = !roundComplete();
+        btn.addEventListener('click', () => {
+          if (!roundComplete()) return;
+          if (!STATE.roundLocked[tKey]) STATE.roundLocked[tKey] = {};
+          STATE.roundLocked[tKey]['r' + n] = true;
+          saveState();
+          checkChallengerTriggers();
+          draw();
+          if (currentView === 'lb-' + tKey) renderLeaderboard(tKey);
+        });
+        lockRow.appendChild(btn);
+        if (!btn.disabled) lockRow.insertAdjacentHTML('beforeend', '<span class="view-note" style="margin:0;">Every hole for every player in the round is filled in — ready to lock.</span>');
+        else lockRow.insertAdjacentHTML('beforeend', '<span class="view-note" style="margin:0;">Fill in all 18 holes for everyone playing this round to enable this.</span>');
+      }
+
       let rows = t.field.map((p, i) => ({ p, fieldPos: i + 1, total: thruTotal(p.name), posLabel: null }));
       if (sortMode === 'score') {
         rows.sort((a, b) => {
@@ -633,7 +708,9 @@
       const thead = document.createElement('thead');
       const headRow = document.createElement('tr');
       headRow.appendChild(sortableHeaderTh(() => sortMode, (m) => { sortMode = m; }, draw, '#'));
-      headRow.innerHTML += `<th>Player</th><th>Ctry</th><th>Thru ${n - 1}</th><th>Round ${n} (to par)</th>`;
+      let holeHeaders = '';
+      for (let h = 1; h <= 18; h++) holeHeaders += `<th class="hole-th">${h}</th>`;
+      headRow.innerHTML += `<th>Player</th><th>Ctry</th><th>Thru ${n - 1}</th>${holeHeaders}<th>Rd ${n}</th>`;
       thead.appendChild(headRow);
       table.appendChild(thead);
       const tbody = document.createElement('tbody');
@@ -642,32 +719,45 @@
       wrap.className = 'table-wrap';
       wrap.appendChild(table);
       tableHost.appendChild(wrap);
-      rows.forEach(({ p, fieldPos, posLabel, total }) => {
+      rows.forEach(({ p, fieldPos, posLabel }) => {
         const missed = cut && cut.missedCut.has(p.name);
         const posCell = sortMode === 'score' ? (posLabel || '<span class="dash">–</span>') : fieldPos;
-        const priorThru = (() => { let s = 0, any = false; for (let i = 1; i < n; i++) { const v = STATE.scores[tKey]['r' + i][p.name]; if (v !== undefined && v !== null) { s += v; any = true; } } return any ? fmtToPar(s) : '<span class="dash">–</span>'; })();
+        const priorSum = (() => {
+          let s = 0, any = false;
+          for (let i = 1; i < n; i++) { const v = roundValue(tKey, i, p.name); if (v !== null) { s += v; any = true; } }
+          return any ? fmtToPar(s) : '<span class="dash">–</span>';
+        })();
         const tr = document.createElement('tr');
         if (missed) {
           tr.style.opacity = '0.5';
-          tr.innerHTML = `<td class="rk mono">${posCell}</td><td class="name">${p.name}</td><td class="ctry">${p.country}</td><td class="num mono">${priorThru}</td><td class="num mono">MC</td>`;
+          let mcCells = ''; for (let h = 0; h < 18; h++) mcCells += '<td class="num mono">–</td>';
+          tr.innerHTML = `<td class="rk mono">${posCell}</td><td class="name">${p.name}</td><td class="ctry">${p.country}</td><td class="num mono">${priorSum}</td>${mcCells}<td class="num mono">MC</td>`;
         } else {
-          const val = roundScores[p.name];
-          tr.innerHTML = `<td class="rk mono">${posCell}</td><td class="name">${p.name}</td><td class="ctry">${p.country}</td><td class="num mono">${priorThru}</td>
-            <td><input type="text" inputmode="numeric" class="score-input mono" data-player="${p.name}" value="${val !== undefined && val !== null ? val : ''}" placeholder="E" /></td>`;
+          const holes = holesFor(p.name);
+          let holeCells = '';
+          for (let h = 0; h < 18; h++) {
+            const v = holes[h];
+            holeCells += `<td><input type="text" inputmode="numeric" class="hole-input mono" data-player="${p.name}" data-hole="${h}" value="${v !== null ? v : ''}" placeholder="E" ${locked ? 'disabled' : ''} /></td>`;
+          }
+          const roundTotal = holes.every(h => h !== null) ? fmtToPar(holes.reduce((a, b) => a + b, 0)) : '<span class="dash">–</span>';
+          tr.innerHTML = `<td class="rk mono">${posCell}</td><td class="name">${p.name}</td><td class="ctry">${p.country}</td><td class="num mono">${priorSum}</td>${holeCells}<td class="num mono score-total">${roundTotal}</td>`;
         }
         tbody.appendChild(tr);
       });
-      tbody.querySelectorAll('.score-input').forEach(input => {
+      tbody.querySelectorAll('.hole-input').forEach(input => {
         input.addEventListener('change', () => {
-          const raw = input.value.trim();
-          let v = null;
-          if (raw === '') v = null;
-          else if (/^e$/i.test(raw)) v = 0;
-          else if (/^[+-]?\d+$/.test(raw)) v = parseInt(raw, 10);
-          else { input.value = ''; v = null; }
-          roundScores[input.dataset.player] = v;
+          const v = parseHoleValue(input.value);
+          if (v === undefined) { input.value = ''; return; }
+          const holes = holesFor(input.dataset.player);
+          holes[input.dataset.hole] = v;
           saveState();
-          checkChallengerTriggers();
+          // Live-update just this row's total + the lock button, without a full re-render (keeps focus/scroll steady).
+          const tr = input.closest('tr');
+          const totalCell = tr.querySelector('td:last-child');
+          const complete = holes.every(h => h !== null);
+          totalCell.innerHTML = complete ? fmtToPar(holes.reduce((a, b) => a + b, 0)) : '<span class="dash">–</span>';
+          const lockBtn = lockRow.querySelector('button');
+          if (lockBtn) lockBtn.disabled = !roundComplete();
           if (currentView === 'lb-' + tKey) renderLeaderboard(tKey);
         });
       });
@@ -681,10 +771,7 @@
     const t = byKey[tKey];
     const cut = computeCut(tKey);
     const rows = t.field.map(p => {
-      const rounds = [1, 2, 3, 4].map(n => {
-        const v = STATE.scores[tKey] && STATE.scores[tKey]['r' + n] ? STATE.scores[tKey]['r' + n][p.name] : undefined;
-        return (v === undefined || v === null) ? null : v;
-      });
+      const rounds = [1, 2, 3, 4].map(n => roundValue(tKey, n, p.name));
       const played = rounds.filter(v => v !== null);
       const total = played.length ? played.reduce((a, b) => a + b, 0) : null;
       const missed = !!(cut && cut.missedCut.has(p.name));

@@ -7,7 +7,7 @@ const {
 } = require('./sim');
 const { RANK_121_200, REAL_EXTRA } = require('./data/players');
 const {
-  pointsForRank, owgrTableFor, champTableFor, simulateRoundScore, cutSizeFor,
+  pointsWithTies, owgrTableFor, champTableFor, simulateRoundScore, cutSizeFor,
   OWGR_MAJOR, OWGR_REGULAR, CHAMP_REGULAR, CHAMP_SIGNATURE, CHAMP_MAJOR,
 } = require('./points');
 
@@ -53,10 +53,11 @@ function simulateTournament(field, group, cutSize) {
 
   const owgrTable = owgrTableFor(group);
   const champTable = champTableFor(group);
+  const owgrPts = pointsWithTies(standings, owgrTable);
+  const champPts = pointsWithTies(standings, champTable);
   standings.forEach(({ p }, i) => {
-    const rank = i + 1;
-    p.owgr = Math.round((p.owgr + pointsForRank(owgrTable, rank)) * 10000) / 10000;
-    p.pgaPts = Math.round((p.pgaPts + pointsForRank(champTable, rank)) * 1000) / 1000;
+    p.owgr = Math.round((p.owgr + owgrPts[i]) * 10000) / 10000;
+    p.pgaPts = Math.round((p.pgaPts + champPts[i]) * 1000) / 1000;
   });
   // Missed-cut players earn 0 — nothing to add, but they still played 2 real rounds.
 

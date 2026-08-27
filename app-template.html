@@ -205,6 +205,23 @@
     }
     return 0;
   }
+  // Tied players split points the way they'd split prize money: each gets
+  // the AVERAGE of the point values for every position the tied group
+  // occupies. `sortedRows` must already be sorted ascending by `.total`.
+  function pointsWithTies(sortedRows, table) {
+    const out = new Array(sortedRows.length);
+    let i = 0;
+    while (i < sortedRows.length) {
+      let j = i;
+      while (j + 1 < sortedRows.length && sortedRows[j + 1].total === sortedRows[i].total) j++;
+      let sum = 0;
+      for (let rank = i + 1; rank <= j + 1; rank++) sum += pointsForRank(table, rank);
+      const avg = sum / (j - i + 1);
+      for (let k = i; k <= j; k++) out[k] = avg;
+      i = j + 1;
+    }
+    return out;
+  }
   // A player "made the cut" if their round 1+2 total is within the
   // tournament's cut size (place + ties) — computed live off whoever
   // currently has both rounds entered, so it firms up as scores come in.
@@ -299,10 +316,11 @@
       rows.sort((a, b) => a.total - b.total || a.p.name.localeCompare(b.p.name));
       const owgrTable = t.group === 'champ' ? DATA.pointTables.owgrRegular : DATA.pointTables.owgrMajor;
       const champTable = t.group === 'champ' ? DATA.pointTables.champSignature : DATA.pointTables.champMajor;
+      const owgrPts = pointsWithTies(rows, owgrTable);
+      const champPts = pointsWithTies(rows, champTable);
       rows.forEach((r, i) => {
-        const rank = i + 1;
-        owgrTotal[r.p.name] = (owgrTotal[r.p.name] || 0) + pointsForRank(owgrTable, rank);
-        champ[r.p.name] = (champ[r.p.name] || 0) + pointsForRank(champTable, rank);
+        owgrTotal[r.p.name] = (owgrTotal[r.p.name] || 0) + owgrPts[i];
+        champ[r.p.name] = (champ[r.p.name] || 0) + champPts[i];
       });
     });
     // Challenger Series: feeds World Ranking at half value, feeds its own

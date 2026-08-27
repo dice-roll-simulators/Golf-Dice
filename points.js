@@ -41,6 +41,27 @@ function pointsForRank(anchors, rank) {
   return 0;
 }
 
+// Tied players split points the same way they'd split prize money: each
+// player in a tied group gets the AVERAGE of the point values for every
+// position the group occupies (e.g. two players tied for 3rd each get the
+// average of the 3rd- and 4th-place values), not the value for a single
+// arbitrarily-assigned rank. `sortedRows` must already be sorted ascending
+// by `.total` — ties are detected by exact equality.
+function pointsWithTies(sortedRows, table) {
+  const out = new Array(sortedRows.length);
+  let i = 0;
+  while (i < sortedRows.length) {
+    let j = i;
+    while (j + 1 < sortedRows.length && sortedRows[j + 1].total === sortedRows[i].total) j++;
+    let sum = 0;
+    for (let rank = i + 1; rank <= j + 1; rank++) sum += pointsForRank(table, rank);
+    const avg = sum / (j - i + 1);
+    for (let k = i; k <= j; k++) out[k] = avg;
+    i = j + 1;
+  }
+  return out;
+}
+
 // group: 'champ' (8 elevated + 3 postseason events) | 'players' | 'major'
 function owgrTableFor(group) { return group === 'champ' ? OWGR_REGULAR : OWGR_MAJOR; }
 function champTableFor(group) {
@@ -101,6 +122,6 @@ function simulateRoundScore(rng) {
 
 module.exports = {
   OWGR_MAJOR, OWGR_REGULAR, CHAMP_REGULAR, CHAMP_SIGNATURE, CHAMP_MAJOR,
-  pointsForRank, owgrTableFor, champTableFor, realWorldOwgr, simulateRoundScore, DICE,
+  pointsForRank, pointsWithTies, owgrTableFor, champTableFor, realWorldOwgr, simulateRoundScore, DICE,
   CUT_SIZES, cutSizeFor,
 };

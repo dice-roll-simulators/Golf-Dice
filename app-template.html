@@ -161,7 +161,10 @@
 
   // ---------------- state ----------------
   function defaultState() {
-    return { scores: {}, roundSelections: { r1: null, r2: null, r3: null, r4: null }, diceLog: { d1: [], d2: [], d3: [], d4: [] } };
+    return {
+      scores: {}, roundSelections: { r1: null, r2: null, r3: null, r4: null }, diceLog: { d1: [], d2: [], d3: [], d4: [] },
+      challengerLog: [], challengerResults: [],
+    };
   }
   let STATE = defaultState();
   try {
@@ -192,6 +195,7 @@
     STATE.scores = JSON.parse(JSON.stringify(DATA.seedScores));
     saveState();
   }
+  checkChallengerTriggers(); // catches anything already complete (e.g. the seeded Pebble Beach result)
 
   function pointsForRank(anchors, rank) {
     if (rank < anchors[0][0]) return anchors[0][1];
@@ -219,6 +223,57 @@
     const madeCut = new Set(thru2.filter(x => x.total <= cutValue).map(x => x.name));
     const missedCut = new Set(thru2.filter(x => x.total > cutValue).map(x => x.name));
     return { madeCut, missedCut, cutValue: cutValue === Infinity ? null : cutValue, enteredCount: thru2.length };
+  }
+
+  // ---------------- Challenger Series (auto-triggered shadow tour) ----------------
+  // A Championship Series tournament is "complete" once every player has a
+  // round 1+2 total (so the cut is final, not just projected) and everyone
+  // who made that final cut has both round 3 and round 4 in.
+  function isTournamentComplete(tKey) {
+    const t = byKey[tKey];
+    const sc = STATE.scores[tKey];
+    if (!t || !sc) return false;
+    const cut = computeCut(tKey);
+    if (!cut || cut.enteredCount < t.field.length) return false;
+    for (const p of t.field) {
+      if (cut.missedCut.has(p.name)) continue;
+      const r3 = sc.r3 && sc.r3[p.name], r4 = sc.r4 && sc.r4[p.name];
+      if (r3 === undefined || r3 === null || r4 === undefined || r4 === null) return false;
+    }
+    return true;
+  }
+
+  // Randomised companion event drawn from the open depth pool, weighted
+  // toward the top of the pool the same way the Depth Pool tab's resample
+  // does. Challenger Series points use the full Championship Series
+  // (Signature-tier) table; World Ranking points use the regular-event OWGR
+  // table at HALF value — per tournament, worth the same as a Championship
+  // Series event on the Challenger board, but only half the World Ranking
+  // weight, and with zero effect on the real Championship Series standings.
+  function runChallengerEvent(trigger) {
+    const size = 120 + Math.floor(Math.random() * 21); // 120-140
+    const field = weightedSample(DATA.backgroundPool, size, Math.random);
+    const order = weightedSample(field, field.length, Math.random);
+    const owgrTable = DATA.pointTables.owgrRegular;
+    const champTable = DATA.pointTables.champSignature;
+    const result = order.map((p, i) => {
+      const rank = i + 1;
+      return { name: p.name, country: p.country, rank, owgrPts: pointsForRank(owgrTable, rank) * 0.5, challengerPts: pointsForRank(champTable, rank) };
+    });
+    return { triggerKey: trigger.key, triggerName: trigger.name, dates: trigger.dates, fieldSize: field.length, result };
+  }
+
+  function checkChallengerTriggers() {
+    let changed = false;
+    DATA.tournaments.filter(t => t.group === 'champ').forEach(t => {
+      if (STATE.challengerLog.includes(t.key)) return;
+      if (!isTournamentComplete(t.key)) return;
+      STATE.challengerResults.push(runChallengerEvent(t));
+      STATE.challengerLog.push(t.key);
+      changed = true;
+    });
+    if (changed) saveState();
+    return changed;
   }
 
   // Real OWGR ranking is an AVERAGE — total points earned divided by a
@@ -250,9 +305,18 @@
         champ[r.p.name] = (champ[r.p.name] || 0) + pointsForRank(champTable, rank);
       });
     });
+    // Challenger Series: feeds World Ranking at half value, feeds its own
+    // separate points board at full value, never touches `champ` above.
+    const challenger = {};
+    STATE.challengerResults.forEach(ev => {
+      ev.result.forEach(r => {
+        owgrTotal[r.name] = (owgrTotal[r.name] || 0) + r.owgrPts;
+        challenger[r.name] = (challenger[r.name] || 0) + r.challengerPts;
+      });
+    });
     const owgrAvg = {};
     Object.entries(owgrTotal).forEach(([name, total]) => { owgrAvg[name] = total / OWGR_DIVISOR; });
-    return { owgr: owgrAvg, champ };
+    return { owgr: owgrAvg, champ, challenger };
   }
   const GROUP_LABEL = { champ: 'Championship Series', players: 'THE PLAYERS', major: 'Major' };
 
@@ -267,6 +331,7 @@
   NAV.push({ group: 'Tools', items: [{ key: 'dice', label: 'Dice' }] });
   NAV.push({ group: 'Score Entry', items: [1, 2, 3, 4].map(n => ({ key: 'round' + n, label: 'Round ' + n })) });
   NAV.push({ group: 'Standings', items: [{ key: 'champpoints', label: 'Championship Series' }, { key: 'worldranking', label: 'World Ranking' }] });
+  NAV.push({ group: 'Challenger Series', items: [{ key: 'challengertournament', label: 'Challenger Series Tournament' }, { key: 'challengerstandings', label: 'Challenger Series Standings' }] });
   NAV.push({ group: 'Championship Series', items: DATA.tournaments.filter(t => t.group === 'champ').map(t => ({ key: 'lb-' + t.key, label: t.name })) });
   NAV.push({ group: 'Majors & Players', items: DATA.tournaments.filter(t => t.group !== 'champ').map(t => ({ key: 'lb-' + t.key, label: t.name })) });
   NAV.push({ group: 'Reference', items: [{ key: 'reference', label: 'Depth Pool' }] });
@@ -324,6 +389,8 @@
     else if (currentView.startsWith('lb-')) renderLeaderboard(currentView.slice(3));
     else if (currentView === 'champpoints') renderChampPoints();
     else if (currentView === 'worldranking') renderWorldRanking();
+    else if (currentView === 'challengertournament') renderChallengerTournament();
+    else if (currentView === 'challengerstandings') renderChallengerStandings();
     else if (currentView === 'reference') renderReference();
     showOnly(currentView);
   }
@@ -564,6 +631,7 @@
           else { input.value = ''; v = null; }
           roundScores[input.dataset.player] = v;
           saveState();
+          checkChallengerTriggers();
           if (currentView === 'lb-' + tKey) renderLeaderboard(tKey);
         });
       });
@@ -683,7 +751,7 @@
       .map(([name, pts]) => ({ name, country: NAME_INDEX.get(name), points: pts }))
       .sort((a, b) => b.points - a.points);
     el.innerHTML = `<div class="view-head"><h2>Championship Series Points</h2><div class="meta">${rows.length} players on the board</div></div>
-      <p class="view-note">Season points from every Championship Series event, THE PLAYERS, and all four majors — recalculated live from whatever's entered in Round 1&ndash;4. Point values follow the <a href="https://en.wikipedia.org/wiki/List_of_point_distributions_of_the_FedEx_Cup" style="color:inherit;">FedEx Cup distribution</a> by tier (Signature-tier for the 11 Championship Series events, Major-tier for majors and THE PLAYERS).</p>`;
+      <p class="view-note">Season points from every Championship Series event, THE PLAYERS, and all four majors — recalculated live from whatever's entered in Round 1&ndash;4. Point values follow the <a href="https://en.wikipedia.org/wiki/List_of_point_distributions_of_the_FedEx_Cup" style="color:inherit;">FedEx Cup distribution</a> by tier (Signature-tier for the ${DATA.tournaments.filter(t => t.group === 'champ').length} Championship Series events, Major-tier for majors and THE PLAYERS). Entirely separate from the Challenger Series board.</p>`;
     if (!rows.length) { el.innerHTML += '<p class="view-note">No results yet — enter scores in Round 1&ndash;4 to populate this board.</p>'; return; }
     standingsTable(el, rows);
   }
@@ -695,6 +763,46 @@
       .sort((a, b) => b.points - a.points);
     el.innerHTML = `<div class="view-head"><h2>World Ranking</h2><div class="meta">${rows.length} ranked players</div></div>
       <p class="view-note">Average points — total points divided by ${OWGR_DIVISOR} — starting from the real OWGR snapshot (<a href="https://www.owgr.com/current-world-ranking" style="color:inherit;">owgr.com, Aug 2026</a>) and moving with every tournament entered in Round 1&ndash;4. Raw points per finish follow the real OWGR curve for a <a href="https://www.owgr.com/events/the-154th-open-11468" style="color:inherit;">major</a> or a <a href="https://www.owgr.com/events/cadillac-championship-11319" style="color:inherit;">regular event</a>, by tier, before being folded into the ${OWGR_DIVISOR}-divisor average. This is live, not a fixed snapshot.</p>`;
+    standingsTable(el, rows);
+  }
+
+  // ---------------- Challenger Series ----------------
+  function renderChallengerTournament() {
+    const el = viewContainer('challengertournament');
+    const results = STATE.challengerResults;
+    el.innerHTML = `<div class="view-head"><h2>Challenger Series Tournament</h2><div class="meta">${results.length} event${results.length === 1 ? '' : 's'} run</div></div>
+      <p class="view-note">Every time a Championship Series event finishes (round 1 cut through round 4), a companion Challenger Series event auto-runs here — a randomised, weighted result drawn from the real 121+ depth pool, ranks 121&ndash;${120 + DATA.backgroundPool.length}. Field size varies 120&ndash;140 each time. It has no effect on the Championship Series board; it feeds the Challenger Series Standings tab at full value and the World Ranking at half value.</p>`;
+    if (!results.length) {
+      el.innerHTML += '<p class="view-note">Nothing yet — complete a Championship Series event (all rounds, cut included) in Round 1&ndash;4 to trigger the first one.</p>';
+      return;
+    }
+    results.slice().reverse().forEach(ev => {
+      const box = document.createElement('div');
+      box.style.marginBottom = '28px';
+      box.innerHTML = `<div class="chips" style="margin-bottom:10px;"><span class="chip">Triggered by ${ev.triggerName}</span><span class="chip">${ev.dates}</span><span class="chip">${ev.fieldSize} players</span></div>`;
+      const wrap = document.createElement('div');
+      wrap.innerHTML = `<div class="table-wrap" style="max-height:360px;"><table><thead><tr><th>Pos</th><th>Player</th><th>Ctry</th><th>Challenger pts</th><th>World Ranking pts</th></tr></thead><tbody></tbody></table></div>`;
+      const tbody = wrap.querySelector('tbody');
+      ev.result.forEach(r => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td class="rk mono">${r.rank}</td><td class="name">${r.name}</td><td class="ctry">${r.country}</td><td class="num mono">${r.challengerPts.toFixed(2)}</td><td class="num mono">${r.owgrPts.toFixed(4)}</td>`;
+        tbody.appendChild(tr);
+      });
+      box.appendChild(wrap);
+      el.appendChild(box);
+    });
+  }
+
+  function renderChallengerStandings() {
+    const el = viewContainer('challengerstandings');
+    const { challenger } = computeStandings();
+    const rows = Object.entries(challenger)
+      .filter(([, pts]) => pts > 0)
+      .map(([name, pts]) => ({ name, country: NAME_INDEX.get(name), points: pts }))
+      .sort((a, b) => b.points - a.points);
+    el.innerHTML = `<div class="view-head"><h2>Challenger Series Standings</h2><div class="meta">${rows.length} players on the board</div></div>
+      <p class="view-note">Season points from the auto-run Challenger Series companion events, at the same per-tournament value as the real Championship Series (Signature-tier FedEx Cup points) — but this board and that one never affect each other.</p>`;
+    if (!rows.length) { el.innerHTML += '<p class="view-note">No Challenger Series events have run yet.</p>'; return; }
     standingsTable(el, rows);
   }
 

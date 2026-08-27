@@ -71,27 +71,36 @@ function simulateTournament(field, group, cutSize) {
 const championshipRoster = () => fieldOut(TOP_120.map(([n]) => reg.byName.get(n)));
 
 const CHAMP_EVENTS = [
+  ["farmers", "Farmers Insurance Open", "Jan 27–30"],
+  ["phoenix", "WM Phoenix Open", "Feb 3–6"],
   ["pebble", "AT&T Pebble Beach Pro-Am", "Feb 10–13"],
   ["genesis", "The Genesis Invitational", "Feb 24–27"],
   ["miami", "Cadillac Championship", "Mar 9–12"],
   ["arnold", "Arnold Palmer Invitational", "Mar 23–26"],
+  ["houston", "Texas Children's Houston Open", "Mar 27–Apr 2"],
   ["heritage", "RBC Heritage", "Apr 20–23"],
   ["truist", "Truist Championship", "May 18–21"],
   ["memorial", "the Memorial Tournament", "Jun 8–11"],
   ["travelers", "Travelers Championship", "Jun 29–Jul 2"],
+  ["scottishopen", "Genesis Scottish Open", "Jul 13–16"],
   ["finale", "Championship Series Finale", "Aug 17–20"],
   ["matchgroup", "TOUR Championship — Group Stage", "Aug 24–26"],
   ["matchko", "TOUR Championship — Knockout", "Aug 31–Sep 3"],
 ];
+const CHAMP_BY_KEY = new Map(CHAMP_EVENTS.map((e) => [e[0], e]));
+function pushChamp(...keys) {
+  keys.forEach((key) => {
+    const [, name, dates] = CHAMP_BY_KEY.get(key);
+    tournaments.push({ key, name, dates, group: 'champ', cutSize: cutSizeFor(key) });
+  });
+}
 
 const tournaments = [];
 const seedScores = {};
 const simulatedLog = [];
 
-// --- Feb: champ events up to and including Pebble Beach (which we simulate) ---
-CHAMP_EVENTS.slice(0, 3).forEach(([key, name, dates]) => {
-  tournaments.push({ key, name, dates, group: 'champ', cutSize: cutSizeFor(key) });
-});
+// --- Jan-Mar: champ events up to and including Pebble Beach (which we simulate) ---
+pushChamp('farmers', 'phoenix', 'pebble', 'genesis', 'miami');
 
 // Simulate Pebble Beach now (first event of the two we're asked to run).
 {
@@ -107,9 +116,7 @@ CHAMP_EVENTS.slice(0, 3).forEach(([key, name, dates]) => {
   tournaments.push({ key: 'players', name: 'THE PLAYERS Championship', dates: 'Mar 16–19', group: 'players', field: fieldOut(field), cutSize: cutSizeFor('players') });
 }
 
-CHAMP_EVENTS.slice(3, 4).forEach(([key, name, dates]) => { // Arnold Palmer
-  tournaments.push({ key, name, dates, group: 'champ', cutSize: cutSizeFor(key) });
-});
+pushChamp('arnold', 'houston');
 
 // --- Masters: field built from post-Pebble-Beach ranking + points, then simulated ---
 {
@@ -120,9 +127,7 @@ CHAMP_EVENTS.slice(3, 4).forEach(([key, name, dates]) => { // Arnold Palmer
   simulatedLog.push({ key: 'masters', name: 'Masters Tournament', winner: result.standings[0], missedCut: result.missedCut.length });
 }
 
-CHAMP_EVENTS.slice(4, 8).forEach(([key, name, dates]) => { // heritage, truist, memorial, travelers
-  tournaments.push({ key, name, dates, group: 'champ', cutSize: cutSizeFor(key) });
-});
+pushChamp('heritage', 'truist', 'memorial', 'travelers');
 
 const majorMeta = { pga: ['PGA Championship', 'May 25–28'], usopen: ['U.S. Open', 'Jun 22–25'], open: ['The Open Championship', 'Jul 20–23'] };
 [['pga', pgaChampField], ['usopen', usOpenField], ['open', openChampField]].forEach(([key, fn]) => {
@@ -130,15 +135,13 @@ const majorMeta = { pga: ['PGA Championship', 'May 25–28'], usopen: ['U.S. Ope
   tournaments.push({ key, name: majorMeta[key][0], dates: majorMeta[key][1], group: 'major', field: fieldOut(built.field), categories: built.categories, cutSize: cutSizeFor(key) });
 });
 
-CHAMP_EVENTS.slice(8).forEach(([key, name, dates]) => { // finale, matchgroup, matchko
-  tournaments.push({ key, name, dates, group: 'champ', cutSize: cutSizeFor(key) });
-});
+pushChamp('scottishopen', 'finale', 'matchgroup', 'matchko');
 
 // Champ-group tournaments all share one roster rather than each carrying a copy.
 const roster = championshipRoster();
 tournaments.forEach((t) => { if (t.group === 'champ') t.field = roster; });
 // Re-sort into the real chronological order for display.
-const ORDER = ['pebble', 'genesis', 'miami', 'players', 'arnold', 'masters', 'heritage', 'truist', 'memorial', 'travelers', 'pga', 'usopen', 'open', 'finale', 'matchgroup', 'matchko'];
+const ORDER = ['farmers', 'phoenix', 'pebble', 'genesis', 'miami', 'players', 'arnold', 'houston', 'masters', 'heritage', 'truist', 'memorial', 'travelers', 'pga', 'usopen', 'open', 'scottishopen', 'finale', 'matchgroup', 'matchko'];
 tournaments.sort((a, b) => ORDER.indexOf(a.key) - ORDER.indexOf(b.key));
 
 const appData = {

@@ -113,6 +113,8 @@
 
   .btn{ font-family:'IBM Plex Mono',monospace; font-size:0.78rem; letter-spacing:0.03em; padding:9px 14px; border-radius:8px; border:1px solid var(--line); background:var(--bg-raised); color:var(--ink-soft); cursor:pointer; }
   .btn:hover{ background:var(--accent-soft); color:var(--ink); }
+  .btn:disabled{ cursor:default; }
+  .btn:disabled:hover{ background:var(--bg-raised); color:var(--ink-soft); }
   .btn.primary{ background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600; }
   :root[data-theme="dark"] .btn.primary, :root:not([data-theme="light"]) .btn.primary{ color:#0c1a15; }
 
@@ -163,7 +165,7 @@
   function defaultState() {
     return {
       scores: {}, roundSelections: { r1: null, r2: null, r3: null, r4: null }, diceLog: { d1: [], d2: [], d3: [], d4: [] },
-      challengerLog: [], challengerResults: [],
+      challengerLog: [], challengerResults: [], challengerRefreshed: [],
     };
   }
   let STATE = defaultState();
@@ -291,6 +293,22 @@
     });
     if (changed) saveState();
     return changed;
+  }
+
+  // Re-rolls one already-run Challenger Series event against the current
+  // depth pool — allowed exactly once per event (e.g. after the pool itself
+  // gets refreshed/rebalanced), tracked in STATE.challengerRefreshed.
+  function canRefreshChallengerEvent(triggerKey) {
+    return !STATE.challengerRefreshed.includes(triggerKey);
+  }
+  function refreshChallengerEvent(triggerKey) {
+    if (!canRefreshChallengerEvent(triggerKey)) return false;
+    const idx = STATE.challengerResults.findIndex(ev => ev.triggerKey === triggerKey);
+    if (idx === -1) return false;
+    STATE.challengerResults[idx] = runChallengerEvent(byKey[triggerKey]);
+    STATE.challengerRefreshed.push(triggerKey);
+    saveState();
+    return true;
   }
 
   // Real OWGR ranking is an AVERAGE — total points earned divided by a
@@ -789,7 +807,7 @@
     const el = viewContainer('challengertournament');
     const results = STATE.challengerResults;
     el.innerHTML = `<div class="view-head"><h2>Challenger Series Tournament</h2><div class="meta">${results.length} event${results.length === 1 ? '' : 's'} run</div></div>
-      <p class="view-note">Every time a Championship Series event finishes (round 1 cut through round 4), a companion Challenger Series event auto-runs here — a randomised, weighted result drawn from the real 121+ depth pool, ranks 121&ndash;${120 + DATA.backgroundPool.length}. Field size varies 120&ndash;140 each time. It has no effect on the Championship Series board; it feeds the Challenger Series Standings tab at full value and the World Ranking at half value.</p>`;
+      <p class="view-note">Every time a Championship Series event finishes (round 1 cut through round 4), a companion Challenger Series event auto-runs here — a randomised, weighted result drawn from the real 121+ depth pool, ranks 121&ndash;${120 + DATA.backgroundPool.length}. Field size varies 120&ndash;140 each time. It has no effect on the Championship Series board; it feeds the Challenger Series Standings tab at full value and the World Ranking at half value. Each event can be re-rolled against the current depth pool exactly once, with "Refresh (once)" below it.</p>`;
     if (!results.length) {
       el.innerHTML += '<p class="view-note">Nothing yet — complete a Championship Series event (all rounds, cut included) in Round 1&ndash;4 to trigger the first one.</p>';
       return;
@@ -797,7 +815,22 @@
     results.slice().reverse().forEach(ev => {
       const box = document.createElement('div');
       box.style.marginBottom = '28px';
-      box.innerHTML = `<div class="chips" style="margin-bottom:10px;"><span class="chip">Triggered by ${ev.triggerName}</span><span class="chip">${ev.dates}</span><span class="chip">${ev.fieldSize} players</span></div>`;
+      const canRefresh = canRefreshChallengerEvent(ev.triggerKey);
+      const chips = document.createElement('div');
+      chips.className = 'chips';
+      chips.style.marginBottom = '10px';
+      chips.innerHTML = `<span class="chip">Triggered by ${ev.triggerName}</span><span class="chip">${ev.dates}</span><span class="chip">${ev.fieldSize} players</span>`;
+      const refreshBtn = document.createElement('button');
+      refreshBtn.className = 'btn';
+      refreshBtn.textContent = canRefresh ? 'Refresh (once)' : 'Already refreshed';
+      refreshBtn.disabled = !canRefresh;
+      if (!canRefresh) refreshBtn.style.opacity = '0.5';
+      refreshBtn.addEventListener('click', () => {
+        if (!refreshChallengerEvent(ev.triggerKey)) return;
+        renderChallengerTournament();
+      });
+      chips.appendChild(refreshBtn);
+      box.appendChild(chips);
       const wrap = document.createElement('div');
       wrap.innerHTML = `<div class="table-wrap" style="max-height:360px;"><table><thead><tr><th>Pos</th><th>Player</th><th>Ctry</th><th>Challenger pts</th><th>World Ranking pts</th></tr></thead><tbody></tbody></table></div>`;
       const tbody = wrap.querySelector('tbody');

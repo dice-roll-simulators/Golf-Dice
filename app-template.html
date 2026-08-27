@@ -58,6 +58,12 @@
   .picker-row{ display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
   .picker-row label{ font-family:'IBM Plex Mono',monospace; font-size:0.76rem; text-transform:uppercase; letter-spacing:0.06em; color:var(--ink-faint); }
 
+  .data-section{ display:flex; flex-direction:column; gap:10px; padding:18px 0; border-bottom:1px solid var(--line); }
+  .data-section:last-child{ border-bottom:none; }
+  .data-section h3{ font-size:1.05rem; font-weight:600; }
+  .data-textarea{ width:100%; min-height:160px; resize:vertical; font-family:'IBM Plex Mono',monospace; font-size:0.78rem; color:var(--ink); background:var(--bg-raised); border:1px solid var(--line); border-radius:8px; padding:12px; box-sizing:border-box; }
+  .data-textarea:focus-visible{ outline:2px solid var(--accent); outline-offset:1px; }
+
   /* custom dropdown (native <select> popups were freezing inside the artifact frame) */
   .ddown{ position:relative; min-width:300px; }
   .ddown-btn{ width:100%; text-align:left; display:flex; justify-content:space-between; align-items:center; gap:10px;
@@ -454,6 +460,7 @@
   NAV.push({ group: 'Championship Series', items: DATA.tournaments.filter(t => t.group === 'champ').map(t => ({ key: 'lb-' + t.key, label: t.name })) });
   NAV.push({ group: 'Majors & Players', items: DATA.tournaments.filter(t => t.group !== 'champ').map(t => ({ key: 'lb-' + t.key, label: t.name })) });
   NAV.push({ group: 'Reference', items: [{ key: 'reference', label: 'Depth Pool' }] });
+  NAV.push({ group: 'Data', items: [{ key: 'data', label: 'Save / Load' }] });
 
   const sidebarEl = document.getElementById('sidebar');
   NAV.forEach(section => {
@@ -511,6 +518,7 @@
     else if (currentView === 'challengertournament') renderChallengerTournament();
     else if (currentView === 'challengerstandings') renderChallengerStandings();
     else if (currentView === 'reference') renderReference();
+    else if (currentView === 'data') renderData();
     showOnly(currentView);
   }
 
@@ -718,6 +726,9 @@
     // the cut still shows greyed out on Round 1/2 — they played those rounds
     // for real, so their entered scores stay visible, just dimmed.
     const cut = computeCut(tKey);
+    // Each tournament has its own randomised draw order (t.startOrder, built
+    // server-side) rather than every event listing the same roster order.
+    const startOrderIndex = new Map((t.startOrder || t.field.map(p => p.name)).map((name, i) => [name, i]));
 
     // Round 1 starts in field order; rounds 2-4 default to the previous
     // round's leaderboard (thru-total sort), same as a real tee-time draw.
@@ -783,8 +794,10 @@
         else lockRow.insertAdjacentHTML('beforeend', '<span class="view-note" style="margin:0;">Fill in all 18 holes for everyone playing this round to enable this.</span>');
       }
 
-      let rows = t.field.map((p, i) => ({ p, fieldPos: i + 1, total: thruTotal(p.name), posLabel: null }));
-      if (sortMode === 'score') {
+      let rows = t.field.map((p) => ({ p, fieldPos: (startOrderIndex.get(p.name) || 0) + 1, total: thruTotal(p.name), posLabel: null }));
+      if (sortMode === 'field') {
+        rows.sort((a, b) => a.fieldPos - b.fieldPos);
+      } else if (sortMode === 'score') {
         rows.sort((a, b) => {
           if (a.total === null && b.total === null) return compareBySurname(a.p.name, b.p.name);
           if (a.total === null) return 1;
@@ -867,12 +880,16 @@
     const el = viewContainer('lb-' + tKey);
     const t = byKey[tKey];
     const cut = computeCut(tKey);
+    // Each tournament has its own randomised draw order (t.startOrder, built
+    // server-side) rather than every event listing the same roster order.
+    const startOrderIndex = new Map((t.startOrder || t.field.map(p => p.name)).map((name, i) => [name, i]));
     const rows = t.field.map(p => {
       const rounds = [1, 2, 3, 4].map(n => roundValue(tKey, n, p.name));
       const played = rounds.filter(v => v !== null);
       const total = played.length ? played.reduce((a, b) => a + b, 0) : null;
       const missed = !!(cut && cut.missedCut.has(p.name));
-      return { p, rounds, thru: played.length, total, missed };
+      const fieldPos = (startOrderIndex.get(p.name) || 0) + 1;
+      return { p, rounds, thru: played.length, total, missed, fieldPos };
     });
 
     let sortMode = 'score';
@@ -937,6 +954,8 @@
           return av - bv;
         });
         assignPositionsField(sorted.filter(r => r.rounds[idx] !== null), r => r.rounds[idx]);
+      } else if (sortMode === 'field') {
+        sorted.sort((a, b) => a.fieldPos - b.fieldPos);
       }
       tableHost.innerHTML = '';
       const table = document.createElement('table');
@@ -1130,6 +1149,92 @@
       sampledSet = new Set(sample.map(p => p.name));
       el.querySelector('#resample-count').textContent = `${size}-man sample`;
       drawPool();
+    });
+  }
+
+  // ---------------- data (save / load) ----------------
+  // Everything lives in this browser's localStorage only — this tab lets a
+  // player carry that data elsewhere (another device, a backup before
+  // clearing browser data) as a plain JSON file or pasted text.
+  function renderData() {
+    const el = viewContainer('data');
+    el.innerHTML = `<div class="view-head"><h2>Save &amp; Load</h2><div class="meta">back up or restore your season</div></div>
+      <p class="view-note">Every score, lock, and Challenger Series result lives only in this browser's local storage — it won't follow you to another device or survive clearing browser data on its own. Use this tab to save a backup, and to restore one later.</p>
+      <div class="data-section">
+        <h3>Save your data</h3>
+        <p class="view-note">Download a backup file, or copy the text below and store it somewhere safe.</p>
+        <div class="picker-row">
+          <button class="btn primary" id="download-data-btn">Download backup file</button>
+          <button class="btn" id="copy-data-btn">Copy to clipboard</button>
+          <span class="view-note" id="export-status" style="margin:0;"></span>
+        </div>
+        <textarea class="data-textarea mono" id="export-box" readonly spellcheck="false"></textarea>
+      </div>
+      <div class="data-section">
+        <h3>Load your data</h3>
+        <p class="view-note">Choose a previously-downloaded backup file, or paste its contents below, then restore. This replaces everything currently entered in this browser.</p>
+        <div class="picker-row"><input type="file" id="import-file-input" accept="application/json,.json" /></div>
+        <textarea class="data-textarea mono" id="import-box" spellcheck="false" placeholder="Paste backup JSON here…"></textarea>
+        <div class="picker-row">
+          <button class="btn danger" id="restore-data-btn">Restore from above</button>
+          <span class="view-note" id="import-status" style="margin:0;"></span>
+        </div>
+      </div>`;
+
+    const exportBox = el.querySelector('#export-box');
+    const exportStatus = el.querySelector('#export-status');
+    function refreshExport() { exportBox.value = JSON.stringify(STATE, null, 2); }
+    refreshExport();
+
+    el.querySelector('#download-data-btn').addEventListener('click', () => {
+      refreshExport();
+      const blob = new Blob([exportBox.value], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `fairway-draft-board-${DATA.year}-backup.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      exportStatus.textContent = 'Backup file downloaded.';
+    });
+    el.querySelector('#copy-data-btn').addEventListener('click', async () => {
+      refreshExport();
+      exportBox.focus();
+      exportBox.select();
+      try {
+        await navigator.clipboard.writeText(exportBox.value);
+        exportStatus.textContent = 'Copied to clipboard.';
+      } catch (e) {
+        exportStatus.textContent = 'Couldn’t reach the clipboard — the text above is selected, copy it with Ctrl/Cmd+C.';
+      }
+    });
+
+    const fileInput = el.querySelector('#import-file-input');
+    const importBox = el.querySelector('#import-box');
+    const importStatus = el.querySelector('#import-status');
+    fileInput.addEventListener('change', () => {
+      const file = fileInput.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => { importBox.value = reader.result; importStatus.textContent = `Loaded ${file.name} — review below, then Restore.`; };
+      reader.onerror = () => { importStatus.textContent = 'Could not read that file.'; };
+      reader.readAsText(file);
+    });
+    el.querySelector('#restore-data-btn').addEventListener('click', () => {
+      let parsed;
+      try { parsed = JSON.parse(importBox.value); } catch (e) { importStatus.textContent = 'That doesn’t look like valid backup JSON.'; return; }
+      if (!parsed || typeof parsed !== 'object' || !parsed.scores || !parsed.roundLocked) {
+        importStatus.textContent = 'That doesn’t look like a Fairway Draft Board backup.';
+        return;
+      }
+      if (!confirm('Restore this backup? This replaces everything currently entered in this browser and cannot be undone.')) return;
+      STATE = Object.assign(defaultState(), parsed);
+      saveState();
+      checkChallengerTriggers();
+      refreshExport();
+      importStatus.textContent = 'Backup restored.';
     });
   }
 

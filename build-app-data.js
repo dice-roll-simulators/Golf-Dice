@@ -148,6 +148,21 @@ tournaments.forEach((t) => { if (t.group === 'champ') t.field = roster; });
 const ORDER = ['farmers', 'phoenix', 'pebble', 'genesis', 'miami', 'players', 'arnold', 'houston', 'masters', 'heritage', 'truist', 'memorial', 'travelers', 'pga', 'usopen', 'open', 'scottishopen', 'finale', 'matchgroup', 'matchko'];
 tournaments.sort((a, b) => ORDER.indexOf(a.key) - ORDER.indexOf(b.key));
 
+// Champ events all share one `field` array/order (the roster, by ranking) —
+// without this, every tournament's Round 1 tee sheet would list players in
+// the identical order. Each tournament gets its own independent shuffle
+// (never mutating `field` itself, which majors/Players also rely on for
+// cut/points bookkeeping) used purely as that event's starting draw order.
+function shuffled(list, rand) {
+  const out = list.slice();
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(rand() * (i + 1));
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
+}
+tournaments.forEach((t) => { t.startOrder = shuffled(t.field, rng).map((p) => p.name); });
+
 const appData = {
   seed: SEED,
   year: YEAR,

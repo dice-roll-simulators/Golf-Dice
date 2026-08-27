@@ -121,6 +121,11 @@
   .btn:disabled:hover{ background:var(--bg-raised); color:var(--ink-soft); }
   .btn.primary{ background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600; }
   :root[data-theme="dark"] .btn.primary, :root:not([data-theme="light"]) .btn.primary{ color:#0c1a15; }
+  .btn.danger{ border-color:var(--bad); color:var(--bad); }
+  .btn.danger:hover{ background:rgba(184,68,45,0.12); color:var(--bad); }
+  .btn.danger:disabled{ opacity:0.5; }
+  .btn.danger:disabled:hover{ background:var(--bg-raised); }
+  .lock-row{ flex-wrap:wrap; }
 
   .disclaimer{ font-size:0.83rem; color:var(--ink-faint); background:var(--sand-soft); border:1px solid var(--line); border-radius:10px; padding:11px 15px; max-width:78ch; }
   .disclaimer b{ color:var(--ink-soft); font-weight:600; }
@@ -289,6 +294,45 @@
     return true;
   }
 
+  // Data-completeness check for one round, independent of whether it has
+  // actually been locked yet — this is what gates the tournament-level
+  // "Lock scores" button (which locks every remaining round in one go).
+  function isRoundDataComplete(tKey, n) {
+    const t = byKey[tKey];
+    if (!t) return false;
+    if (n >= 3) {
+      const cut = computeCut(tKey);
+      if (!cut || cut.enteredCount < t.field.length) return false;
+      return t.field.every(p => cut.missedCut.has(p.name) || roundValue(tKey, n, p.name) !== null);
+    }
+    return t.field.every(p => roundValue(tKey, n, p.name) !== null);
+  }
+  function canLockTournament(tKey) { return [1, 2, 3, 4].every(n => isRoundDataComplete(tKey, n)); }
+  function isTournamentLocked(tKey) { return [1, 2, 3, 4].every(n => isRoundLocked(tKey, n)); }
+  // Finalizes every round at once (rather than requiring a visit to each of
+  // the four Round tabs) — locking saves immediately, so the tournament's
+  // data is complete and persisted the moment it's locked.
+  function lockTournamentResults(tKey) {
+    if (!canLockTournament(tKey)) return;
+    if (!STATE.roundLocked[tKey]) STATE.roundLocked[tKey] = {};
+    [1, 2, 3, 4].forEach(n => { STATE.roundLocked[tKey]['r' + n] = true; });
+    saveState();
+    checkChallengerTriggers();
+  }
+  // Wipes a tournament back to unplayed — scores, round locks, and its
+  // Challenger Series companion event (if one has auto-run off it) — so a
+  // seeded/trial result can be removed before the season actually starts.
+  function clearTournamentResults(tKey) {
+    delete STATE.scores[tKey];
+    delete STATE.roundLocked[tKey];
+    const clIdx = STATE.challengerLog.indexOf(tKey);
+    if (clIdx !== -1) STATE.challengerLog.splice(clIdx, 1);
+    STATE.challengerResults = STATE.challengerResults.filter(ev => ev.triggerKey !== tKey);
+    const crIdx = STATE.challengerRefreshed.indexOf(tKey);
+    if (crIdx !== -1) STATE.challengerRefreshed.splice(crIdx, 1);
+    saveState();
+  }
+
   // Randomised companion event drawn from the open depth pool, weighted
   // toward the top of the pool the same way the Depth Pool tab's resample
   // does. Challenger Series points use the full Championship Series
@@ -358,7 +402,7 @@
         const rounds = [1, 2, 3, 4].map(n => roundValue(t.key, n, p.name)).filter(v => v !== null);
         return rounds.length ? { p, total: rounds.reduce((a, b) => a + b, 0) } : null;
       }).filter(Boolean);
-      rows.sort((a, b) => a.total - b.total || a.p.name.localeCompare(b.p.name));
+      rows.sort((a, b) => a.total - b.total || compareBySurname(a.p.name, b.p.name));
       const owgrTable = t.group === 'champ' ? DATA.pointTables.owgrRegular : DATA.pointTables.owgrMajor;
       const champTable = t.group === 'champ' ? DATA.pointTables.champSignature : DATA.pointTables.champMajor;
       const owgrPts = pointsWithTies(rows, owgrTable);
@@ -388,6 +432,18 @@
     if (n === 0) return 'E';
     return n > 0 ? '+' + n : String(n);
   }
+
+  // Alphabetical order is by surname (e.g. "Rory McIlroy" sorts under "M"),
+  // stripping generational suffixes so "Notah Begay III" sorts under "Begay".
+  const NAME_SUFFIXES = new Set(['jr', 'jr.', 'sr', 'sr.', 'ii', 'iii', 'iv', 'v']);
+  function surname(fullName) {
+    const parts = fullName.trim().split(/\s+/);
+    while (parts.length > 1 && NAME_SUFFIXES.has(parts[parts.length - 1].toLowerCase().replace(/\.$/, ''))) {
+      parts.pop();
+    }
+    return parts[parts.length - 1] || fullName;
+  }
+  function compareBySurname(a, b) { return surname(a).localeCompare(surname(b)); }
 
   // ---------------- nav ----------------
   const NAV = [];
@@ -590,16 +646,7 @@
   // by .total (no nulls) — real leaderboard tie handling: tied players share
   // a label and the next real position skips ahead by the group size.
   function assignPositions(sortedRows) {
-    let i = 0;
-    while (i < sortedRows.length) {
-      let j = i;
-      while (j + 1 < sortedRows.length && sortedRows[j + 1].total === sortedRows[i].total) j++;
-      const pos = i + 1;
-      const label = j > i ? 'T' + pos : String(pos);
-      for (let k = i; k <= j; k++) sortedRows[k].posLabel = label;
-      i = j + 1;
-    }
-    return sortedRows;
+    return assignPositionsField(sortedRows, r => r.total);
   }
 
   // A clickable "Pos." column header that toggles between field order and
@@ -612,6 +659,44 @@
     th.addEventListener('click', () => { setMode(getMode() === 'score' ? 'field' : 'score'); refresh(); rerender(); });
     refresh();
     return th;
+  }
+
+  // A plain, non-interactive <th> — a small helper so header rows can be
+  // built entirely via appendChild (mixing this with a later `innerHTML +=`
+  // on the same row would silently strip event listeners off any header
+  // already appended, e.g. the sortable ones below).
+  function th(html) {
+    const el = document.createElement('th');
+    el.innerHTML = html;
+    return el;
+  }
+  // A per-round header (R1…R4) that sorts the table by that round's score —
+  // low to high, players without a value for that round sinking to the
+  // bottom, ties broken by surname.
+  function roundHeaderTh(label, mode, getMode, setMode, rerender) {
+    const el = document.createElement('th');
+    el.style.cursor = 'pointer';
+    el.style.userSelect = 'none';
+    function refresh() { el.innerHTML = getMode() === mode ? label + ' &#9662;' : label; }
+    el.addEventListener('click', () => { setMode(mode); refresh(); rerender(); });
+    refresh();
+    return el;
+  }
+
+  // Generalized version of assignPositions below — assigns "1"/"T2"/"T2"/"4"
+  // off any numeric getter, not just `.total`, so a round-column sort can
+  // show tie-aware positions the same way the score sort does.
+  function assignPositionsField(sortedRows, getVal) {
+    let i = 0;
+    while (i < sortedRows.length) {
+      let j = i;
+      while (j + 1 < sortedRows.length && getVal(sortedRows[j + 1]) === getVal(sortedRows[i])) j++;
+      const pos = i + 1;
+      const label = j > i ? 'T' + pos : String(pos);
+      for (let k = i; k <= j; k++) sortedRows[k].posLabel = label;
+      i = j + 1;
+    }
+    return sortedRows;
   }
 
   function parseHoleValue(raw) {
@@ -629,7 +714,10 @@
     if (!STATE.scores[tKey]) STATE.scores[tKey] = {};
     for (let i = 1; i <= n; i++) if (!STATE.scores[tKey]['r' + i]) STATE.scores[tKey]['r' + i] = {};
     const roundScores = STATE.scores[tKey]['r' + n];
-    const cut = n >= 3 ? computeCut(tKey) : null;
+    // Computed for every round (not just 3-4) so a player who's since missed
+    // the cut still shows greyed out on Round 1/2 — they played those rounds
+    // for real, so their entered scores stay visible, just dimmed.
+    const cut = computeCut(tKey);
 
     // Round 1 starts in field order; rounds 2-4 default to the previous
     // round's leaderboard (thru-total sort), same as a real tee-time draw.
@@ -656,7 +744,9 @@
       }
       return arr;
     }
-    function needsThisRound(p) { return !(cut && cut.missedCut.has(p.name)); }
+    // Everyone plays rounds 1-2; only rounds 3-4 are restricted to players
+    // who made the cut.
+    function needsThisRound(p) { return n < 3 || !(cut && cut.missedCut.has(p.name)); }
     function roundComplete() {
       return t.field.every(p => !needsThisRound(p) || holesFor(p.name).every(h => h !== null));
     }
@@ -696,7 +786,7 @@
       let rows = t.field.map((p, i) => ({ p, fieldPos: i + 1, total: thruTotal(p.name), posLabel: null }));
       if (sortMode === 'score') {
         rows.sort((a, b) => {
-          if (a.total === null && b.total === null) return a.p.name.localeCompare(b.p.name);
+          if (a.total === null && b.total === null) return compareBySurname(a.p.name, b.p.name);
           if (a.total === null) return 1;
           if (b.total === null) return -1;
           return a.total - b.total;
@@ -708,9 +798,11 @@
       const thead = document.createElement('thead');
       const headRow = document.createElement('tr');
       headRow.appendChild(sortableHeaderTh(() => sortMode, (m) => { sortMode = m; }, draw, '#'));
-      let holeHeaders = '';
-      for (let h = 1; h <= 18; h++) holeHeaders += `<th class="hole-th">${h}</th>`;
-      headRow.innerHTML += `<th>Player</th><th>Ctry</th><th>Thru ${n - 1}</th>${holeHeaders}<th>Rd ${n}</th>`;
+      headRow.appendChild(th('Player'));
+      headRow.appendChild(th('Ctry'));
+      headRow.appendChild(th('Thru ' + (n - 1)));
+      for (let h = 1; h <= 18; h++) { const c = th(String(h)); c.className = 'hole-th'; headRow.appendChild(c); }
+      headRow.appendChild(th('Rd ' + n));
       thead.appendChild(headRow);
       table.appendChild(thead);
       const tbody = document.createElement('tbody');
@@ -720,7 +812,11 @@
       wrap.appendChild(table);
       tableHost.appendChild(wrap);
       rows.forEach(({ p, fieldPos, posLabel }) => {
-        const missed = cut && cut.missedCut.has(p.name);
+        const missed = !!(cut && cut.missedCut.has(p.name));
+        // Rounds 3-4 aren't played at all once a player's missed the cut;
+        // rounds 1-2 were genuinely played, so still show their real scores,
+        // just greyed out to signal they didn't advance.
+        const skipRound = n >= 3 && missed;
         const posCell = sortMode === 'score' ? (posLabel || '<span class="dash">–</span>') : fieldPos;
         const priorSum = (() => {
           let s = 0, any = false;
@@ -728,11 +824,12 @@
           return any ? fmtToPar(s) : '<span class="dash">–</span>';
         })();
         const tr = document.createElement('tr');
-        if (missed) {
+        if (skipRound) {
           tr.style.opacity = '0.5';
           let mcCells = ''; for (let h = 0; h < 18; h++) mcCells += '<td class="num mono">–</td>';
           tr.innerHTML = `<td class="rk mono">${posCell}</td><td class="name">${p.name}</td><td class="ctry">${p.country}</td><td class="num mono">${priorSum}</td>${mcCells}<td class="num mono">MC</td>`;
         } else {
+          if (missed) tr.style.opacity = '0.5';
           const holes = holesFor(p.name);
           let holeCells = '';
           for (let h = 0; h < 18; h++) {
@@ -779,29 +876,80 @@
     });
 
     let sortMode = 'score';
-    el.innerHTML = `<div class="view-head"><h2>${t.name}</h2><div class="meta">${t.dates}<br/>field of ${t.field.length} &middot; cut: top ${t.cutSize || 65} &amp; ties</div></div>
-      <p class="view-note">Live from whatever's been entered in Round 1&ndash;4 for this tournament — refreshes automatically as scores come in. Click "Pos." to sort by score, with ties shown as "T". Players outside the cut line score 0 toward the Championship Series and World Ranking.</p>`;
+    el.innerHTML = `<div class="view-head"><h2>${t.name}</h2><div class="meta">${t.dates}<br/>field of ${t.field.length} &middot; cut: top ${t.cutSize || 65} &amp; ties</div></div>`;
+    const controlRow = document.createElement('div');
+    controlRow.className = 'lock-row';
+    controlRow.style.marginBottom = '10px';
+    el.appendChild(controlRow);
+    el.insertAdjacentHTML('beforeend', `<p class="view-note">Live from whatever's been entered in Round 1&ndash;4 for this tournament — refreshes automatically as scores come in. Click "Pos." to sort by score, or a round header (R1&ndash;R4) to sort by that round, with ties shown as "T". Players outside the cut line score 0 toward the Championship Series and World Ranking.</p>`);
     const tableHost = document.createElement('div');
     el.appendChild(tableHost);
 
+    function drawControls() {
+      controlRow.innerHTML = '';
+      if (isTournamentLocked(tKey)) {
+        controlRow.insertAdjacentHTML('beforeend', '<span class="lock-status">&#10003; Tournament locked — results final</span>');
+      } else {
+        const canLock = canLockTournament(tKey);
+        const lockBtn = document.createElement('button');
+        lockBtn.className = 'btn primary';
+        lockBtn.textContent = 'Lock scores';
+        lockBtn.disabled = !canLock;
+        lockBtn.addEventListener('click', () => {
+          lockTournamentResults(tKey);
+          renderLeaderboard(tKey);
+        });
+        controlRow.appendChild(lockBtn);
+        controlRow.insertAdjacentHTML('beforeend', `<span class="view-note" style="margin:0;">${canLock ? 'Every round is fully entered — locking finalizes this tournament’s results.' : 'Enter and complete Rounds 1–4 (via the Score Entry tabs) before locking.'}</span>`);
+      }
+      const clearBtn = document.createElement('button');
+      clearBtn.className = 'btn danger';
+      clearBtn.textContent = 'Clear results';
+      clearBtn.disabled = !STATE.scores[tKey];
+      clearBtn.addEventListener('click', () => {
+        if (!confirm(`Clear all entered scores for ${t.name}? This removes every round entered so far (and its Challenger Series companion event, if one has run) and cannot be undone.`)) return;
+        clearTournamentResults(tKey);
+        renderLeaderboard(tKey);
+      });
+      controlRow.appendChild(clearBtn);
+    }
+
     function draw() {
+      drawControls();
       const sorted = rows.slice();
+      const roundMatch = /^r([1-4])$/.exec(sortMode);
       if (sortMode === 'score') {
         sorted.sort((a, b) => {
           if (a.missed !== b.missed) return a.missed ? 1 : -1; // cut players sink below the line
-          if (a.total === null && b.total === null) return a.p.name.localeCompare(b.p.name);
+          if (a.total === null && b.total === null) return compareBySurname(a.p.name, b.p.name);
           if (a.total === null) return 1;
           if (b.total === null) return -1;
           return a.total - b.total;
         });
         assignPositions(sorted.filter(r => !r.missed && r.total !== null));
+      } else if (roundMatch) {
+        const idx = parseInt(roundMatch[1], 10) - 1;
+        sorted.sort((a, b) => {
+          const av = a.rounds[idx], bv = b.rounds[idx];
+          if (av === null && bv === null) return compareBySurname(a.p.name, b.p.name);
+          if (av === null) return 1;
+          if (bv === null) return -1;
+          return av - bv;
+        });
+        assignPositionsField(sorted.filter(r => r.rounds[idx] !== null), r => r.rounds[idx]);
       }
       tableHost.innerHTML = '';
       const table = document.createElement('table');
       const thead = document.createElement('thead');
       const headRow = document.createElement('tr');
       headRow.appendChild(sortableHeaderTh(() => sortMode, (m) => { sortMode = m; }, draw, '#'));
-      headRow.innerHTML += `<th>Player</th><th>Ctry</th><th>R1</th><th>R2</th><th>R3</th><th>R4</th><th>Thru</th><th>Total</th>`;
+      headRow.appendChild(th('Player'));
+      headRow.appendChild(th('Ctry'));
+      ['r1', 'r2', 'r3', 'r4'].forEach((rk, i) => {
+        headRow.appendChild(roundHeaderTh('R' + (i + 1), rk, () => sortMode, (m) => { sortMode = m; }, draw));
+      });
+      headRow.appendChild(th('Thru'));
+      headRow.appendChild(th('Total'));
       thead.appendChild(headRow);
       table.appendChild(thead);
       const tbody = document.createElement('tbody');
@@ -810,6 +958,7 @@
       wrap.className = 'table-wrap';
       wrap.appendChild(table);
       tableHost.appendChild(wrap);
+      const useLabel = sortMode === 'score' || !!roundMatch;
       sorted.forEach((r, idx) => {
         const cell = (v) => v === null ? '<span class="dash">–</span>' : fmtToPar(v);
         const tr = document.createElement('tr');
@@ -819,7 +968,7 @@
             <td class="num mono">${cell(r.rounds[0])}</td><td class="num mono">${cell(r.rounds[1])}</td><td class="num mono">–</td><td class="num mono">–</td>
             <td class="num mono">2/4</td><td class="num mono">${r.total === null ? '<span class="dash">–</span>' : fmtToPar(r.total)}</td>`;
         } else {
-          const posCell = sortMode === 'score' ? (r.posLabel || '<span class="dash">–</span>') : idx + 1;
+          const posCell = useLabel ? (r.posLabel || '<span class="dash">–</span>') : idx + 1;
           const totalCls = r.total === null ? '' : r.total < 0 ? 'good' : r.total > 0 ? 'bad' : '';
           tr.innerHTML = `<td class="rk mono">${posCell}</td><td class="name">${r.p.name}</td><td class="ctry">${r.p.country}</td>
             <td class="num mono">${cell(r.rounds[0])}</td><td class="num mono">${cell(r.rounds[1])}</td><td class="num mono">${cell(r.rounds[2])}</td><td class="num mono">${cell(r.rounds[3])}</td>

@@ -94,13 +94,14 @@ function realWorldOwgr(rank) {
 const CUT_SIZES = { masters: 50, usopen: 60, open: 60, players: 70 };
 function cutSizeFor(key) { return CUT_SIZES[key] || 65; }
 
-// Dice — corrected Die 3 (sums to 50 now) — used only to seed the two demo
-// results server-side; the client Dice tab has its own copy for rolling.
+// Dice — used only to seed the two demo results server-side; the client
+// Dice tab has its own copy for rolling. Dice 1-3 are 100-sided, die 4 is
+// 200-sided.
 const DICE = [
-  { id: 'd1', faces: { eagle: 1, birdie: 9, par: 30, bogey: 9, doubleBogey: 1 } },
-  { id: 'd2', faces: { eagle: 1, birdie: 11, par: 30, bogey: 7, doubleBogey: 1 } },
-  { id: 'd3', faces: { eagle: 1, birdie: 7, par: 30, bogey: 11, doubleBogey: 1 } },
-  { id: 'd4', faces: { eagle: 1, birdie: 9, par: 70, bogey: 17, doubleBogey: 2, tripleBogey: 1 } },
+  { id: 'd1', faces: { eagle: 1, birdie: 14, par: 72, bogey: 12, doubleBogey: 1 } },
+  { id: 'd2', faces: { eagle: 2, birdie: 22, par: 66, bogey: 9, doubleBogey: 1 } },
+  { id: 'd3', faces: { eagle: 1, birdie: 12, par: 62, bogey: 23, doubleBogey: 2 } },
+  { id: 'd4', faces: { eagle: 1, birdie: 19, par: 120, bogey: 55, doubleBogey: 4, tripleBogey: 1 } },
 ];
 const FACE_TO_STROKES = { eagle: -2, birdie: -1, par: 0, bogey: 1, doubleBogey: 2, tripleBogey: 3 };
 function dieBag(die) {

@@ -133,6 +133,12 @@
   .btn.danger:disabled:hover{ background:var(--bg-raised); }
   .lock-row{ flex-wrap:wrap; }
 
+  .move{ font-size:0.78rem; font-weight:600; white-space:nowrap; }
+  .move-up{ color:var(--good); }
+  .move-down{ color:var(--bad); }
+  .move-flat{ color:var(--ink-faint); font-weight:400; }
+  .move-new{ color:var(--accent-strong); }
+
   .disclaimer{ font-size:0.83rem; color:var(--ink-faint); background:var(--sand-soft); border:1px solid var(--line); border-radius:10px; padding:11px 15px; max-width:78ch; }
   .disclaimer b{ color:var(--ink-soft); font-weight:600; }
 
@@ -180,7 +186,7 @@
   function defaultState() {
     return {
       scores: {}, roundLocked: {}, roundSelections: { r1: null, r2: null, r3: null, r4: null }, diceLog: { d1: [], d2: [], d3: [], d4: [] },
-      challengerLog: [], challengerResults: [], challengerRefreshed: [],
+      challengerLog: [], challengerResults: [], challengerRefreshed: [], completionLog: [],
     };
   }
   let STATE = defaultState();
@@ -214,6 +220,7 @@
     saveState();
   }
   checkChallengerTriggers(); // catches anything already complete (e.g. the seeded Pebble Beach result)
+  checkCompletionLog();
 
   function pointsForRank(anchors, rank) {
     if (rank < anchors[0][0]) return anchors[0][1];
@@ -275,6 +282,27 @@
     return { madeCut, missedCut, cutValue: cutValue === Infinity ? null : cutValue, enteredCount: thru2.length };
   }
 
+  // Ranks a tournament's field as it stood after round `n` (place + ties,
+  // ascending — lower to-par is better), among players not missed-cut, so
+  // long as EVERY one of them has all `n` rounds in. Used to build "before
+  // this round" vs "after this round" movement arrows on a leaderboard.
+  // Returns null if `n` is 0 or the field isn't uniformly that far along yet.
+  function standingsMap(tKey, n, cut, field) {
+    if (n <= 0) return null;
+    const pool = field.filter(p => !(cut && cut.missedCut.has(p.name)));
+    const pairs = [];
+    for (const p of pool) {
+      let sum = 0;
+      for (let i = 1; i <= n; i++) {
+        const v = roundValue(tKey, i, p.name);
+        if (v === null) return null;
+        sum += v;
+      }
+      pairs.push([p.name, sum]);
+    }
+    return buildRankMap(pairs, true);
+  }
+
   // ---------------- Challenger Series (auto-triggered shadow tour) ----------------
   // A Championship Series tournament is "complete" once every player has a
   // round 1+2 total (so the cut is final, not just projected) and everyone
@@ -324,6 +352,7 @@
     [1, 2, 3, 4].forEach(n => { STATE.roundLocked[tKey]['r' + n] = true; });
     saveState();
     checkChallengerTriggers();
+    checkCompletionLog();
   }
   // Wipes a tournament back to unplayed — scores, round locks, and its
   // Challenger Series companion event (if one has auto-run off it) — so a
@@ -336,7 +365,27 @@
     STATE.challengerResults = STATE.challengerResults.filter(ev => ev.triggerKey !== tKey);
     const crIdx = STATE.challengerRefreshed.indexOf(tKey);
     if (crIdx !== -1) STATE.challengerRefreshed.splice(crIdx, 1);
+    const compIdx = STATE.completionLog.indexOf(tKey);
+    if (compIdx !== -1) STATE.completionLog.splice(compIdx, 1);
     saveState();
+  }
+
+  // Chronological log of every tournament (Championship Series, majors,
+  // THE PLAYERS — not just the champ group Challenger triggers off) the
+  // moment it's complete. This is what lets the Standings tabs reconstruct
+  // "the rankings right before the last submitted tournament" without
+  // storing a separate snapshot: the previous view is just the current
+  // standings recomputed with that one tournament's contribution rolled back.
+  function checkCompletionLog() {
+    let changed = false;
+    DATA.tournaments.forEach(t => {
+      if (STATE.completionLog.includes(t.key)) return;
+      if (!isTournamentComplete(t.key)) return;
+      STATE.completionLog.push(t.key);
+      changed = true;
+    });
+    if (changed) saveState();
+    return changed;
   }
 
   // Randomised companion event drawn from the open depth pool, weighted
@@ -395,11 +444,16 @@
   // display. Championship Series points are a separate, un-averaged total —
   // real FedEx Cup points aren't divided by anything.
   const OWGR_DIVISOR = 40;
-  function computeStandings() {
+  // `excludeKey`, when given, skips that one tournament's contribution (and
+  // its Challenger Series companion, if any) entirely — this is how the
+  // Standings tabs reconstruct "the rankings right before that submission"
+  // without needing a stored snapshot.
+  function computeStandings(excludeKey) {
     const owgrTotal = {};
     Object.entries(DATA.startingOwgr).forEach(([name, avg]) => { owgrTotal[name] = avg * OWGR_DIVISOR; });
     const champ = {};
     DATA.tournaments.forEach(t => {
+      if (t.key === excludeKey) return;
       const sc = STATE.scores[t.key];
       if (!sc) return;
       const cut = computeCut(t.key);
@@ -422,6 +476,7 @@
     // separate points board at full value, never touches `champ` above.
     const challenger = {};
     STATE.challengerResults.forEach(ev => {
+      if (ev.triggerKey === excludeKey) return;
       ev.result.forEach(r => {
         owgrTotal[r.name] = (owgrTotal[r.name] || 0) + r.owgrPts;
         challenger[r.name] = (challenger[r.name] || 0) + r.challengerPts;
@@ -707,6 +762,46 @@
     return sortedRows;
   }
 
+  // ---------------- movement arrows (shared by leaderboards + standings) ----------------
+  // Ranks a set of [name, value] pairs into 1-based tie-group-start positions
+  // (same convention as assignPositionsField's posLabel numbers) — ascending
+  // for golf scores (lower is better), descending for points (higher is
+  // better). Returns name -> rank.
+  function buildRankMap(pairs, ascending) {
+    const sortedVals = pairs.map(([, v]) => v).sort((a, b) => ascending ? a - b : b - a);
+    const map = new Map();
+    pairs.forEach(([name, v]) => { if (!map.has(name)) map.set(name, sortedVals.indexOf(v) + 1); });
+    return map;
+  }
+  // movement: positive = moved up that many places, negative = moved down,
+  // 0 = held position, 'new' = wasn't ranked at the previous checkpoint,
+  // null/undefined = no previous checkpoint to compare against.
+  function movementHtml(movement) {
+    if (movement === 'new') return '<span class="move move-new">NEW</span>';
+    if (movement === null || movement === undefined) return '<span class="dash">–</span>';
+    if (movement > 0) return `<span class="move move-up">&#9650;${movement}</span>`;
+    if (movement < 0) return `<span class="move move-down">&#9660;${Math.abs(movement)}</span>`;
+    return '<span class="move move-flat">&#9644;</span>';
+  }
+  // Attaches `.movement` to a standings-table `rows` array (each with
+  // `.name`/`.points`, already the exact set shown) by comparing each
+  // player's rank now against their rank in `prevMap` — a name -> points map
+  // from a previous checkpoint (or null if there isn't one yet). `filterFn`,
+  // if given, is applied to prevMap's entries so the previous ranking pool
+  // matches whatever filtering the current rows already went through (e.g.
+  // "points > 0").
+  function attachMovement(rows, prevMap, filterFn) {
+    if (!prevMap) { rows.forEach(r => { r.movement = null; }); return; }
+    const currRankMap = buildRankMap(rows.map(r => [r.name, r.points]), false);
+    const prevEntries = Object.entries(prevMap).filter(filterFn || (() => true));
+    const prevRankMap = buildRankMap(prevEntries, false);
+    rows.forEach(r => {
+      const currRank = currRankMap.get(r.name);
+      const prevRank = prevRankMap.get(r.name);
+      r.movement = currRank === undefined ? null : (prevRank === undefined ? 'new' : prevRank - currRank);
+    });
+  }
+
   function parseHoleValue(raw) {
     raw = raw.trim();
     if (raw === '') return null;
@@ -786,6 +881,7 @@
           STATE.roundLocked[tKey]['r' + n] = true;
           saveState();
           checkChallengerTriggers();
+          checkCompletionLog();
           draw();
           if (currentView === 'lb-' + tKey) renderLeaderboard(tKey);
         });
@@ -892,13 +988,28 @@
       return { p, rounds, thru: played.length, total, missed, fieldPos };
     });
 
+    // Movement arrows compare standings as of the latest LOCKED round to
+    // standings as of the round before that — a real "before/after this
+    // round was submitted" checkpoint, independent of whatever live/unlocked
+    // data is still being entered for a later round.
+    const lockedRounds = [1, 2, 3, 4].filter(n => isRoundLocked(tKey, n));
+    const latestLocked = lockedRounds.length ? Math.max(...lockedRounds) : 0;
+    const currRoundMap = latestLocked >= 1 ? standingsMap(tKey, latestLocked, cut, t.field) : null;
+    const prevRoundMap = latestLocked >= 2 ? standingsMap(tKey, latestLocked - 1, cut, t.field) : null;
+    rows.forEach(r => {
+      if (r.missed || !currRoundMap || !prevRoundMap) { r.movement = null; return; }
+      const currRank = currRoundMap.get(r.p.name);
+      const prevRank = prevRoundMap.get(r.p.name);
+      r.movement = (currRank !== undefined && prevRank !== undefined) ? prevRank - currRank : null;
+    });
+
     let sortMode = 'score';
     el.innerHTML = `<div class="view-head"><h2>${t.name}</h2><div class="meta">${t.dates}<br/>field of ${t.field.length} &middot; cut: top ${t.cutSize || 65} &amp; ties</div></div>`;
     const controlRow = document.createElement('div');
     controlRow.className = 'lock-row';
     controlRow.style.marginBottom = '10px';
     el.appendChild(controlRow);
-    el.insertAdjacentHTML('beforeend', `<p class="view-note">Live from whatever's been entered in Round 1&ndash;4 for this tournament — refreshes automatically as scores come in. Click "Pos." to sort by score, or a round header (R1&ndash;R4) to sort by that round, with ties shown as "T". Players outside the cut line score 0 toward the Championship Series and World Ranking.</p>`);
+    el.insertAdjacentHTML('beforeend', `<p class="view-note">Live from whatever's been entered in Round 1&ndash;4 for this tournament — refreshes automatically as scores come in. Click "Pos." to sort by score, or a round header (R1&ndash;R4) to sort by that round, with ties shown as "T". Players outside the cut line score 0 toward the Championship Series and World Ranking. The Move column shows how a player's position changed once the most recently locked round was submitted, versus the round before it.</p>`);
     const tableHost = document.createElement('div');
     el.appendChild(tableHost);
 
@@ -962,6 +1073,7 @@
       const thead = document.createElement('thead');
       const headRow = document.createElement('tr');
       headRow.appendChild(sortableHeaderTh(() => sortMode, (m) => { sortMode = m; }, draw, '#'));
+      headRow.appendChild(th('Move'));
       headRow.appendChild(th('Player'));
       headRow.appendChild(th('Ctry'));
       ['r1', 'r2', 'r3', 'r4'].forEach((rk, i) => {
@@ -983,13 +1095,13 @@
         const tr = document.createElement('tr');
         if (r.missed) {
           tr.style.opacity = '0.55';
-          tr.innerHTML = `<td class="rk mono">MC</td><td class="name">${r.p.name}</td><td class="ctry">${r.p.country}</td>
+          tr.innerHTML = `<td class="rk mono">MC</td><td class="num mono">${movementHtml(null)}</td><td class="name">${r.p.name}</td><td class="ctry">${r.p.country}</td>
             <td class="num mono">${cell(r.rounds[0])}</td><td class="num mono">${cell(r.rounds[1])}</td><td class="num mono">–</td><td class="num mono">–</td>
             <td class="num mono">2/4</td><td class="num mono">${r.total === null ? '<span class="dash">–</span>' : fmtToPar(r.total)}</td>`;
         } else {
           const posCell = useLabel ? (r.posLabel || '<span class="dash">–</span>') : idx + 1;
           const totalCls = r.total === null ? '' : r.total < 0 ? 'good' : r.total > 0 ? 'bad' : '';
-          tr.innerHTML = `<td class="rk mono">${posCell}</td><td class="name">${r.p.name}</td><td class="ctry">${r.p.country}</td>
+          tr.innerHTML = `<td class="rk mono">${posCell}</td><td class="num mono">${movementHtml(r.movement)}</td><td class="name">${r.p.name}</td><td class="ctry">${r.p.country}</td>
             <td class="num mono">${cell(r.rounds[0])}</td><td class="num mono">${cell(r.rounds[1])}</td><td class="num mono">${cell(r.rounds[2])}</td><td class="num mono">${cell(r.rounds[3])}</td>
             <td class="num mono">${r.thru}/4</td><td class="num mono score-total ${totalCls}">${r.total === null ? '<span class="dash">–</span>' : fmtToPar(r.total)}</td>`;
         }
@@ -1021,18 +1133,25 @@
   }
   function standingsTable(el, rows) {
     const wrap = document.createElement('div');
-    wrap.innerHTML = `<div class="table-wrap"><table><thead><tr><th>Pos</th><th>Player</th><th>Ctry</th><th>Points</th></tr></thead><tbody></tbody></table></div>`;
+    wrap.innerHTML = `<div class="table-wrap"><table><thead><tr><th>Pos</th><th>Move</th><th>Player</th><th>Ctry</th><th>Points</th></tr></thead><tbody></tbody></table></div>`;
     const tbody = wrap.querySelector('tbody');
     rows.forEach((r, i) => {
       const tr = document.createElement('tr');
       tr.dataset.name = r.name.toLowerCase();
-      tr.innerHTML = `<td class="rk mono">${i + 1}</td><td class="name">${r.name}</td><td class="ctry">${r.country || ''}</td><td class="num mono">${r.points.toFixed(2)}</td>`;
+      tr.innerHTML = `<td class="rk mono">${i + 1}</td><td class="num mono">${movementHtml(r.movement)}</td><td class="name">${r.name}</td><td class="ctry">${r.country || ''}</td><td class="num mono">${r.points.toFixed(2)}</td>`;
       tbody.appendChild(tr);
     });
     const filterRow = document.createElement('div');
     el.appendChild(filterRow);
     el.appendChild(wrap);
     addFilter(filterRow, tbody, rows.length);
+  }
+  // Both boards' movement arrows compare "now" to "right before the most
+  // recently submitted tournament" — reconstructed by rolling that one
+  // tournament (and its Challenger Series companion) back out of the same
+  // live computation, rather than storing a separate history of snapshots.
+  function lastCompletedTournamentKey() {
+    return STATE.completionLog.length ? STATE.completionLog[STATE.completionLog.length - 1] : null;
   }
   function renderChampPoints() {
     const el = viewContainer('champpoints');
@@ -1041,8 +1160,10 @@
       .filter(([, pts]) => pts > 0)
       .map(([name, pts]) => ({ name, country: NAME_INDEX.get(name), points: pts }))
       .sort((a, b) => b.points - a.points);
+    const lastKey = lastCompletedTournamentKey();
+    attachMovement(rows, lastKey ? computeStandings(lastKey).champ : null, ([, pts]) => pts > 0);
     el.innerHTML = `<div class="view-head"><h2>Championship Series Points</h2><div class="meta">${rows.length} players on the board</div></div>
-      <p class="view-note">Season points from every Championship Series event, THE PLAYERS, and all four majors — recalculated live from whatever's entered in Round 1&ndash;4. Point values follow the <a href="https://en.wikipedia.org/wiki/List_of_point_distributions_of_the_FedEx_Cup" style="color:inherit;">FedEx Cup distribution</a> by tier (Signature-tier for the ${DATA.tournaments.filter(t => t.group === 'champ').length} Championship Series events, Major-tier for majors and THE PLAYERS). Entirely separate from the Challenger Series board.</p>`;
+      <p class="view-note">Season points from every Championship Series event, THE PLAYERS, and all four majors — recalculated live from whatever's entered in Round 1&ndash;4. Point values follow the <a href="https://en.wikipedia.org/wiki/List_of_point_distributions_of_the_FedEx_Cup" style="color:inherit;">FedEx Cup distribution</a> by tier (Signature-tier for the ${DATA.tournaments.filter(t => t.group === 'champ').length} Championship Series events, Major-tier for majors and THE PLAYERS). Entirely separate from the Challenger Series board — Challenger results never move this one. The Move column shows the shift caused by the last tournament submitted${lastKey ? ` (${byKey[lastKey].name})` : ''}.</p>`;
     if (!rows.length) { el.innerHTML += '<p class="view-note">No results yet — enter scores in Round 1&ndash;4 to populate this board.</p>'; return; }
     standingsTable(el, rows);
   }
@@ -1052,8 +1173,10 @@
     const rows = Object.entries(owgr)
       .map(([name, pts]) => ({ name, country: NAME_INDEX.get(name), points: pts }))
       .sort((a, b) => b.points - a.points);
+    const lastKey = lastCompletedTournamentKey();
+    attachMovement(rows, lastKey ? computeStandings(lastKey).owgr : null);
     el.innerHTML = `<div class="view-head"><h2>World Ranking</h2><div class="meta">${rows.length} ranked players</div></div>
-      <p class="view-note">Average points — total points divided by ${OWGR_DIVISOR} — starting from the real OWGR snapshot (<a href="https://www.owgr.com/current-world-ranking" style="color:inherit;">owgr.com, Aug 2026</a>) and moving with every tournament entered in Round 1&ndash;4. Raw points per finish follow the real OWGR curve for a <a href="https://www.owgr.com/events/the-154th-open-11468" style="color:inherit;">major</a> or a <a href="https://www.owgr.com/events/cadillac-championship-11319" style="color:inherit;">regular event</a>, by tier, before being folded into the ${OWGR_DIVISOR}-divisor average. This is live, not a fixed snapshot.</p>`;
+      <p class="view-note">Average points — total points divided by ${OWGR_DIVISOR} — starting from the real OWGR snapshot (<a href="https://www.owgr.com/current-world-ranking" style="color:inherit;">owgr.com, Aug 2026</a>) and moving with every tournament entered in Round 1&ndash;4, including Challenger Series results at half value. Raw points per finish follow the real OWGR curve for a <a href="https://www.owgr.com/events/the-154th-open-11468" style="color:inherit;">major</a> or a <a href="https://www.owgr.com/events/cadillac-championship-11319" style="color:inherit;">regular event</a>, by tier, before being folded into the ${OWGR_DIVISOR}-divisor average. This is live, not a fixed snapshot. The Move column shows the shift caused by the last tournament submitted${lastKey ? ` (${byKey[lastKey].name})` : ''}.</p>`;
     standingsTable(el, rows);
   }
 
@@ -1106,8 +1229,10 @@
       .filter(([, pts]) => pts > 0)
       .map(([name, pts]) => ({ name, country: NAME_INDEX.get(name), points: pts }))
       .sort((a, b) => b.points - a.points);
+    const lastChallengerKey = STATE.challengerLog.length ? STATE.challengerLog[STATE.challengerLog.length - 1] : null;
+    attachMovement(rows, lastChallengerKey ? computeStandings(lastChallengerKey).challenger : null, ([, pts]) => pts > 0);
     el.innerHTML = `<div class="view-head"><h2>Challenger Series Standings</h2><div class="meta">${rows.length} players on the board</div></div>
-      <p class="view-note">Season points from the auto-run Challenger Series companion events, at the same per-tournament value as the real Championship Series (Signature-tier FedEx Cup points) — but this board and that one never affect each other.</p>`;
+      <p class="view-note">Season points from the auto-run Challenger Series companion events, at the same per-tournament value as the real Championship Series (Signature-tier FedEx Cup points) — but this board and that one never affect each other. The Move column shows the shift caused by the last Challenger Series event${lastChallengerKey ? ` (triggered by ${byKey[lastChallengerKey].name})` : ''}.</p>`;
     if (!rows.length) { el.innerHTML += '<p class="view-note">No Challenger Series events have run yet.</p>'; return; }
     standingsTable(el, rows);
   }
@@ -1233,6 +1358,7 @@
       STATE = Object.assign(defaultState(), parsed);
       saveState();
       checkChallengerTriggers();
+      checkCompletionLog();
       refreshExport();
       importStatus.textContent = 'Backup restored.';
     });

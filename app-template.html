@@ -303,6 +303,25 @@
     return buildRankMap(pairs, true);
   }
 
+  // World Ranking points a tournament's field has earned so far — the exact
+  // per-event calculation computeStandings folds into the World Ranking
+  // total (live off whatever rounds are entered, tie-shared), returned as
+  // name -> points for players who have at least one round in and made the
+  // cut (missed-cut players are handled by the caller, who knows they're 0).
+  function tournamentWrPoints(tKey, t, cut) {
+    const owgrTable = t.group === 'champ' ? DATA.pointTables.owgrRegular : DATA.pointTables.owgrMajor;
+    const rowsForPts = t.field.map(p => {
+      if (cut && cut.missedCut.has(p.name)) return null;
+      const rounds = [1, 2, 3, 4].map(n => roundValue(tKey, n, p.name)).filter(v => v !== null);
+      return rounds.length ? { name: p.name, total: rounds.reduce((a, b) => a + b, 0) } : null;
+    }).filter(Boolean);
+    rowsForPts.sort((a, b) => a.total - b.total || compareBySurname(a.name, b.name));
+    const pts = pointsWithTies(rowsForPts, owgrTable);
+    const map = new Map();
+    rowsForPts.forEach((r, i) => map.set(r.name, pts[i]));
+    return map;
+  }
+
   // ---------------- Challenger Series (auto-triggered shadow tour) ----------------
   // A Championship Series tournament is "complete" once every player has a
   // round 1+2 total (so the cut is final, not just projected) and everyone
@@ -988,6 +1007,13 @@
       return { p, rounds, thru: played.length, total, missed, fieldPos };
     });
 
+    // World Ranking points won in THIS tournament — the same live,
+    // tie-shared calculation World Ranking itself uses per event, surfaced
+    // here per player (mirrors the "World Ranking pts" column already shown
+    // on the Challenger Series Tournament tab).
+    const wrPtsMap = tournamentWrPoints(tKey, t, cut);
+    rows.forEach(r => { r.wrPts = r.missed ? 0 : (wrPtsMap.get(r.p.name) ?? null); });
+
     // Movement arrows compare standings as of the latest LOCKED round to
     // standings as of the round before that — a real "before/after this
     // round was submitted" checkpoint, independent of whatever live/unlocked
@@ -1009,7 +1035,7 @@
     controlRow.className = 'lock-row';
     controlRow.style.marginBottom = '10px';
     el.appendChild(controlRow);
-    el.insertAdjacentHTML('beforeend', `<p class="view-note">Live from whatever's been entered in Round 1&ndash;4 for this tournament — refreshes automatically as scores come in. Click "Pos." to sort by score, or a round header (R1&ndash;R4) to sort by that round, with ties shown as "T". Players outside the cut line score 0 toward the Championship Series and World Ranking. The Move column shows how a player's position changed once the most recently locked round was submitted, versus the round before it.</p>`);
+    el.insertAdjacentHTML('beforeend', `<p class="view-note">Live from whatever's been entered in Round 1&ndash;4 for this tournament — refreshes automatically as scores come in. Click "Pos." to sort by score, or a round header (R1&ndash;R4) to sort by that round, with ties shown as "T". Players outside the cut line score 0 toward the Championship Series and World Ranking. The Move column shows how a player's position changed once the most recently locked round was submitted, versus the round before it. WR pts is how many World Ranking points that finish is worth right now, tie-shared the same way the World Ranking tab totals them.</p>`);
     const tableHost = document.createElement('div');
     el.appendChild(tableHost);
 
@@ -1081,6 +1107,7 @@
       });
       headRow.appendChild(th('Thru'));
       headRow.appendChild(th('Total'));
+      headRow.appendChild(th('WR pts'));
       thead.appendChild(headRow);
       table.appendChild(thead);
       const tbody = document.createElement('tbody');
@@ -1093,17 +1120,18 @@
       sorted.forEach((r, idx) => {
         const cell = (v) => v === null ? '<span class="dash">–</span>' : fmtToPar(v);
         const tr = document.createElement('tr');
+        const wrCell = r.wrPts === null ? '<span class="dash">–</span>' : r.wrPts.toFixed(4);
         if (r.missed) {
           tr.style.opacity = '0.55';
           tr.innerHTML = `<td class="rk mono">MC</td><td class="num mono">${movementHtml(null)}</td><td class="name">${r.p.name}</td><td class="ctry">${r.p.country}</td>
             <td class="num mono">${cell(r.rounds[0])}</td><td class="num mono">${cell(r.rounds[1])}</td><td class="num mono">–</td><td class="num mono">–</td>
-            <td class="num mono">2/4</td><td class="num mono">${r.total === null ? '<span class="dash">–</span>' : fmtToPar(r.total)}</td>`;
+            <td class="num mono">2/4</td><td class="num mono">${r.total === null ? '<span class="dash">–</span>' : fmtToPar(r.total)}</td><td class="num mono">${wrCell}</td>`;
         } else {
           const posCell = useLabel ? (r.posLabel || '<span class="dash">–</span>') : idx + 1;
           const totalCls = r.total === null ? '' : r.total < 0 ? 'good' : r.total > 0 ? 'bad' : '';
           tr.innerHTML = `<td class="rk mono">${posCell}</td><td class="num mono">${movementHtml(r.movement)}</td><td class="name">${r.p.name}</td><td class="ctry">${r.p.country}</td>
             <td class="num mono">${cell(r.rounds[0])}</td><td class="num mono">${cell(r.rounds[1])}</td><td class="num mono">${cell(r.rounds[2])}</td><td class="num mono">${cell(r.rounds[3])}</td>
-            <td class="num mono">${r.thru}/4</td><td class="num mono score-total ${totalCls}">${r.total === null ? '<span class="dash">–</span>' : fmtToPar(r.total)}</td>`;
+            <td class="num mono">${r.thru}/4</td><td class="num mono score-total ${totalCls}">${r.total === null ? '<span class="dash">–</span>' : fmtToPar(r.total)}</td><td class="num mono">${wrCell}</td>`;
         }
         tbody.appendChild(tr);
       });

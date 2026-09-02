@@ -140,6 +140,30 @@
   .move-flat{ color:var(--ink-faint); font-weight:400; }
   .move-new{ color:var(--accent-strong); }
 
+  /* TOUR Championship: Group Stage + Knockout */
+  .group-grid{ display:grid; grid-template-columns:repeat(auto-fill, minmax(280px, 1fr)); gap:16px; }
+  .group-card{ border:1px solid var(--line); border-radius:12px; padding:14px; background:var(--bg-raised); display:flex; flex-direction:column; gap:10px; }
+  .group-card h3{ font-size:0.95rem; font-weight:600; display:flex; align-items:center; gap:8px; }
+  .group-standings{ width:100%; border-collapse:collapse; font-size:0.82rem; }
+  .group-standings th{ text-align:left; color:var(--ink-faint); font-family:'IBM Plex Mono',monospace; font-size:0.68rem; text-transform:uppercase; letter-spacing:0.05em; padding:2px 6px; }
+  .group-standings td{ padding:3px 6px; }
+  .group-standings tr.qualified{ background:var(--accent-soft); }
+  .match-list{ display:flex; flex-direction:column; gap:6px; }
+  .match-row{ display:grid; grid-template-columns:1fr 1fr; gap:6px; }
+  .match-row.decided{ opacity:0.9; }
+  .match-side{ display:flex; align-items:center; gap:6px; font-family:'Work Sans',sans-serif; font-size:0.78rem; text-align:left; padding:6px 8px; border-radius:8px; border:1px solid var(--line); background:var(--bg); color:var(--ink-soft); cursor:pointer; }
+  .match-side:hover:not(:disabled){ background:var(--accent-soft); color:var(--ink); }
+  .match-side:disabled{ cursor:default; color:var(--ink-faint); }
+  .match-side.winner{ border-color:var(--good); background:rgba(47,110,79,0.12); color:var(--ink); font-weight:600; }
+  .match-side .seed-chip{ color:var(--ink-faint); font-size:0.7rem; }
+  .bracket{ display:flex; gap:20px; overflow-x:auto; padding-bottom:8px; }
+  .bracket-col{ display:flex; flex-direction:column; gap:14px; min-width:220px; }
+  .bracket-col h3{ font-size:0.85rem; font-weight:600; color:var(--ink-faint); text-transform:uppercase; letter-spacing:0.05em; font-family:'IBM Plex Mono',monospace; font-size:0.72rem; }
+  .bracket-col .match-row{ grid-template-columns:1fr; }
+  .champion-banner{ margin-top:8px; font-size:1.1rem; font-weight:600; padding:14px 18px; border-radius:12px; background:var(--accent-soft); color:var(--ink); }
+
+  .cutoff-row td{ padding:6px 10px; font-family:'IBM Plex Mono',monospace; font-size:0.7rem; text-transform:uppercase; letter-spacing:0.05em; color:var(--accent-strong); text-align:center; border-top:1px dashed var(--accent); border-bottom:1px dashed var(--accent); background:var(--accent-soft); }
+
   .disclaimer{ font-size:0.83rem; color:var(--ink-faint); background:var(--sand-soft); border:1px solid var(--line); border-radius:10px; padding:11px 15px; max-width:78ch; }
   .disclaimer b{ color:var(--ink-soft); font-weight:600; }
 
@@ -188,7 +212,7 @@
     return {
       scores: {}, roundLocked: {}, roundSelections: { r1: null, r2: null, r3: null, r4: null }, diceLog: { d1: [], d2: [], d3: [], d4: [] },
       challengerLog: [], challengerResults: [], challengerRefreshed: [], completionLog: [],
-      majorFields: {}, legacyStartingOwgr: {},
+      majorFields: {}, legacyStartingOwgr: {}, matchPlay: null,
     };
   }
   let STATE = defaultState();
@@ -229,7 +253,7 @@
   const ALL_PLAYERS_BY_NAME = new Map(ALL_PLAYERS.map(p => [p.name, p]));
   const EU_COUNTRIES = ["ENG", "SCO", "IRL", "WAL", "FRA", "GER", "SWE", "ESP", "ITA", "NOR", "DEN", "BEL", "NED", "AUT", "FIN"];
   // The event that must be locked in before each field can be built.
-  const PRECEDING_EVENT = { players: 'arnold', masters: 'houston', pga: 'truist', usopen: 'memorial', open: 'scottishopen' };
+  const PRECEDING_EVENT = { players: 'arnold', masters: 'houston', pga: 'truist', usopen: 'memorial', open: 'scottishopen', finale: 'open' };
 
   function fieldIsReady(tKey) {
     const t = byKey[tKey];
@@ -259,6 +283,7 @@
       pga: 'the top 120 in World Ranking, up to 10 exempt past champions, and 20 simulated PGA Championship club professionals.',
       usopen: 'the top 100 in World Ranking, exempt past champions, and a USA-weighted random fill to 150.',
       open: 'the top 100 in World Ranking, exempt past champions, and a Europe-weighted random fill to 150.',
+      finale: 'the top 90 in Championship Series points — no other categories.',
     };
     const body = NOTES[t.key];
     if (!body || !pName) return '';
@@ -380,7 +405,15 @@
     randomFillClient(set, 150, 'EU');
     return { field: Array.from(set.values()), categories: { ranking: 100 } };
   }
-  const MAJOR_FIELD_BUILDERS = { players: buildPlayersField, masters: buildMastersField, pga: buildPgaField, usopen: buildUsOpenField, open: buildOpenField };
+  // The Championship Series Finale: the top 90 in Championship Series
+  // points — no past champions, no club pros, no random fill — as of right
+  // after the Open Championship, the event immediately before it.
+  function buildFinaleField(upToKey) {
+    const { champ } = computeStandings(undefined, upToKey);
+    const ranked = ALL_PLAYERS.slice().sort((a, b) => (champ[b.name] || 0) - (champ[a.name] || 0));
+    return { field: ranked.slice(0, 90), categories: { points: 90 } };
+  }
+  const MAJOR_FIELD_BUILDERS = { players: buildPlayersField, masters: buildMastersField, pga: buildPgaField, usopen: buildUsOpenField, open: buildOpenField, finale: buildFinaleField };
 
   // Builds (once) and persists each major/THE PLAYERS field the moment the
   // event right before it is locked in. A field, once built, never changes —
@@ -421,6 +454,114 @@
     return changed;
   }
 
+  // ---------------- TOUR Championship: Group Stage + Knockout ----------------
+  // Not stroke play at all — a 32-man match-play bracket seeded off the live
+  // Championship Series standings the moment the Finale is confirmed
+  // complete. Built once (STATE.matchPlay), then played out by declaring a
+  // winner for each match; nothing here ever earns World Ranking or
+  // Championship Series points.
+  const MATCH_PLAY_KEYS = new Set(['matchgroup', 'matchko']);
+  const GROUP_LETTERS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
+
+  // Builds the 32-seed field and the 8 groups (round-robin, one player from
+  // each pot of 8 per group) the moment the Finale is locked in. Never
+  // rebuilt once it exists, same as a major's field.
+  function ensureMatchPlay() {
+    if (STATE.matchPlay) return false;
+    if (!isTournamentComplete('finale')) return false;
+    const { champ } = computeStandings(undefined, 'finale');
+    const seeds = ALL_PLAYERS.slice()
+      .sort((a, b) => (champ[b.name] || 0) - (champ[a.name] || 0))
+      .slice(0, 32)
+      .map((p, i) => ({ seed: i + 1, name: p.name, country: p.country }));
+    const groups = {};
+    GROUP_LETTERS.forEach(letter => { groups[letter] = { letter, seeds: [], matches: [] }; });
+    seeds.forEach(s => { groups[GROUP_LETTERS[(s.seed - 1) % 8]].seeds.push(s); });
+    GROUP_LETTERS.forEach(letter => {
+      const players = groups[letter].seeds;
+      for (let i = 0; i < players.length; i++) {
+        for (let j = i + 1; j < players.length; j++) {
+          groups[letter].matches.push({ id: `${letter}${i}${j}`, p1: players[i].name, p2: players[j].name, winner: null });
+        }
+      }
+    });
+    STATE.matchPlay = { seeds, groups, bracket: null };
+    saveState();
+    return true;
+  }
+  // Derived, not stored: win counts and standings for one group, plus
+  // whether every one of its round-robin matches has been decided.
+  function groupStandings(letter) {
+    const g = STATE.matchPlay.groups[letter];
+    const wins = {};
+    g.seeds.forEach(s => { wins[s.name] = 0; });
+    g.matches.forEach(m => { if (m.winner) wins[m.winner] = (wins[m.winner] || 0) + 1; });
+    const complete = g.matches.every(m => !!m.winner);
+    const standings = g.seeds.slice().sort((a, b) => (wins[b.name] - wins[a.name]) || (a.seed - b.seed))
+      .map(s => Object.assign({ wins: wins[s.name] }, s));
+    return { standings, complete };
+  }
+  function allGroupsComplete() {
+    return !!(STATE.matchPlay && GROUP_LETTERS.every(l => groupStandings(l).complete));
+  }
+  // Round of 16: winner of each group plays the runner-up of the next group
+  // over (A/B, C/D, E/F, G/H), both ways round — 1st A v 2nd B, 1st B v 2nd A,
+  // and so on — so no Round of 16 match repeats a group-stage pairing.
+  function ensureKnockoutBracket() {
+    if (!STATE.matchPlay) return false;
+    if (STATE.matchPlay.bracket) return true;
+    if (!allGroupsComplete()) return false;
+    const top2 = {};
+    GROUP_LETTERS.forEach(l => { top2[l] = groupStandings(l).standings.slice(0, 2); });
+    const pairs = [['A', 'B'], ['C', 'D'], ['E', 'F'], ['G', 'H'], ['B', 'A'], ['D', 'C'], ['F', 'E'], ['H', 'G']];
+    const r16 = pairs.map(([w, r], i) => ({
+      id: 'r16-' + i,
+      p1: top2[w][0].name, p1From: w + '1',
+      p2: top2[r][1].name, p2From: r + '2',
+      winner: null,
+    }));
+    STATE.matchPlay.bracket = { r16, qf: [], sf: [], f: [] };
+    refreshBracket();
+    saveState();
+    return true;
+  }
+  // Recomputes qf/sf/f from whatever's been decided so far, preserving any
+  // winner already declared for a match whose two finalists haven't changed.
+  function refreshBracket() {
+    const b = STATE.matchPlay.bracket;
+    if (!b) return;
+    function buildRound(prevRound, count, prefix) {
+      const existing = b[prefix] && b[prefix].length === count ? b[prefix] : null;
+      const round = existing || Array.from({ length: count }, (_, i) => ({ id: `${prefix}-${i}`, p1: null, p2: null, winner: null }));
+      for (let i = 0; i < count; i++) {
+        const a = prevRound[i * 2], c = prevRound[i * 2 + 1];
+        round[i].p1 = a ? a.winner : null;
+        round[i].p1From = a ? a.id : null;
+        round[i].p2 = c ? c.winner : null;
+        round[i].p2From = c ? c.id : null;
+        if (round[i].winner && round[i].winner !== round[i].p1 && round[i].winner !== round[i].p2) round[i].winner = null;
+      }
+      return round;
+    }
+    b.qf = buildRound(b.r16, 4, 'qf');
+    b.sf = buildRound(b.qf, 2, 'sf');
+    b.f = buildRound(b.sf, 1, 'f');
+  }
+  function declareGroupMatchWinner(letter, matchId, winnerName) {
+    const m = STATE.matchPlay.groups[letter].matches.find(x => x.id === matchId);
+    if (!m || (winnerName !== m.p1 && winnerName !== m.p2)) return;
+    m.winner = m.winner === winnerName ? null : winnerName; // click again to clear
+    saveState();
+    ensureKnockoutBracket();
+  }
+  function declareBracketWinner(round, matchId, winnerName) {
+    const m = STATE.matchPlay.bracket[round].find(x => x.id === matchId);
+    if (!m || (winnerName !== m.p1 && winnerName !== m.p2)) return;
+    m.winner = m.winner === winnerName ? null : winnerName;
+    refreshBracket();
+    saveState();
+  }
+
   // Seed the two simulated results in on first run only — never overwrite a
   // returning visitor's own entered scores.
   if (Object.keys(STATE.scores).length === 0 && DATA.seedScores) {
@@ -431,6 +572,8 @@
   checkChallengerTriggers(); // catches anything already complete (e.g. the seeded Pebble Beach result)
   checkCompletionLog();
   ensureMajorFields();
+    ensureMatchPlay();
+    ensureKnockoutBracket();
 
   function pointsForRank(anchors, rank) {
     if (rank < anchors[0][0]) return anchors[0][1];
@@ -583,6 +726,8 @@
     checkChallengerTriggers();
     checkCompletionLog();
     ensureMajorFields();
+    ensureMatchPlay();
+    ensureKnockoutBracket();
   }
   // Wipes a tournament back to unplayed — scores, round locks, and its
   // Challenger Series companion event (if one has auto-run off it) — so a
@@ -814,6 +959,8 @@
   function renderCurrentView() {
     if (currentView === 'dice') renderDice();
     else if (currentView.startsWith('round')) renderRound(parseInt(currentView.replace('round', ''), 10));
+    else if (currentView === 'lb-matchgroup') renderMatchGroupStage();
+    else if (currentView === 'lb-matchko') renderKnockoutBracket();
     else if (currentView.startsWith('lb-')) renderLeaderboard(currentView.slice(3));
     else if (currentView === 'champpoints') renderChampPoints();
     else if (currentView === 'worldranking') renderWorldRanking();
@@ -939,12 +1086,13 @@
         <div id="picker-${key}"></div>
       </div>
       <div id="round-body-${key}"></div>`;
-    // A major/THE PLAYERS whose field hasn't been built yet has no one to
-    // enter scores for — leave it out of the picker until it's ready
-    // (its Leaderboard tab explains what still needs to be locked in first).
+    // Anything whose field hasn't been built yet has no one to enter scores
+    // for (its Leaderboard tab explains what still needs to be locked in
+    // first) — and the Group Stage / Knockout aren't stroke play at all, so
+    // they never belong here regardless.
     const groups = ['champ', 'players', 'major'].map(g => ({
       label: GROUP_LABEL[g],
-      items: DATA.tournaments.filter(t => t.group === g && (g === 'champ' || fieldIsReady(t.key))).map(t => ({ value: t.key, label: t.name })),
+      items: DATA.tournaments.filter(t => t.group === g && !MATCH_PLAY_KEYS.has(t.key) && fieldIsReady(t.key)).map(t => ({ value: t.key, label: t.name })),
     })).filter(g => g.items.length > 0);
     const pickerHost = el.querySelector('#picker-' + key);
     pickerHost.appendChild(createDropdown(groups, selected || '', '— choose a tournament —', (value) => {
@@ -1134,6 +1282,8 @@
           checkChallengerTriggers();
           checkCompletionLog();
           ensureMajorFields();
+    ensureMatchPlay();
+    ensureKnockoutBracket();
           draw();
           if (currentView === 'lb-' + tKey) renderLeaderboard(tKey);
         });
@@ -1378,6 +1528,106 @@
     draw();
   }
 
+  // ---------------- TOUR Championship: Group Stage ----------------
+  function matchRow(container, m, players, onPick) {
+    const row = document.createElement('div');
+    row.className = 'match-row' + (m.winner ? ' decided' : '');
+    const seedOf = (name) => { const s = players.find(p => p.name === name); return s ? s.seed : null; };
+    [m.p1, m.p2].forEach(name => {
+      const side = document.createElement('button');
+      side.type = 'button';
+      side.className = 'match-side' + (m.winner === name ? ' winner' : '');
+      side.disabled = !name;
+      side.innerHTML = name ? `<span class="mono seed-chip">${seedOf(name) != null ? '#' + seedOf(name) : ''}</span><span class="name">${name}</span>` : '<span class="dash">TBD</span>';
+      if (name) side.addEventListener('click', () => onPick(name));
+      row.appendChild(side);
+    });
+    container.appendChild(row);
+  }
+  function renderMatchGroupStage() {
+    const el = viewContainer('lb-matchgroup');
+    const t = byKey['matchgroup'];
+    if (!STATE.matchPlay) {
+      el.innerHTML = `<div class="view-head"><h2>${t.name}</h2><div class="meta">${t.dates}</div></div>
+        <p class="view-note">The Group Stage seeds off the top 32 in Championship Series points the moment the <strong>${byKey.finale.name}</strong> is confirmed complete. Come back once that's done.</p>`;
+      return;
+    }
+    el.innerHTML = `<div class="view-head"><h2>${t.name}</h2><div class="meta">${t.dates}<br/>32 players &middot; 8 groups of 4</div></div>
+      <p class="view-note">Seeded 1&ndash;32 off Championship Series points right after the Finale: one player from each pot of 8 (1&ndash;8, 9&ndash;16, 17&ndash;24, 25&ndash;32) per group. Every group plays a round robin (each player faces the other three); click a player to declare them the winner of that match, click again to undo. Top 2 in each group advance to the Knockout bracket.</p>
+      <div class="group-grid" id="group-grid"></div>`;
+    const grid = el.querySelector('#group-grid');
+    GROUP_LETTERS.forEach(letter => {
+      const g = STATE.matchPlay.groups[letter];
+      const { standings, complete } = groupStandings(letter);
+      const card = document.createElement('div');
+      card.className = 'group-card';
+      card.innerHTML = `<h3>Group ${letter}${complete ? ' <span class="lock-status" style="font-size:0.72rem;">&#10003; final</span>' : ''}</h3>`;
+      const standTable = document.createElement('table');
+      standTable.className = 'group-standings';
+      standTable.innerHTML = '<thead><tr><th>Seed</th><th>Player</th><th>Ctry</th><th>W</th></tr></thead>';
+      const sbody = document.createElement('tbody');
+      standings.forEach((s, i) => {
+        const tr = document.createElement('tr');
+        if (i < 2) tr.className = 'qualified';
+        tr.innerHTML = `<td class="rk mono">#${s.seed}</td><td class="name">${s.name}</td><td class="ctry">${s.country}</td><td class="num mono">${s.wins}</td>`;
+        sbody.appendChild(tr);
+      });
+      standTable.appendChild(sbody);
+      card.appendChild(standTable);
+      const matchesWrap = document.createElement('div');
+      matchesWrap.className = 'match-list';
+      g.matches.forEach(m => {
+        matchRow(matchesWrap, m, g.seeds, (winnerName) => {
+          declareGroupMatchWinner(letter, m.id, winnerName);
+          renderMatchGroupStage();
+          if (currentView === 'lb-matchko') renderKnockoutBracket();
+        });
+      });
+      card.appendChild(matchesWrap);
+      grid.appendChild(card);
+    });
+  }
+
+  // ---------------- TOUR Championship: Knockout ----------------
+  function renderKnockoutBracket() {
+    const el = viewContainer('lb-matchko');
+    const t = byKey['matchko'];
+    ensureKnockoutBracket();
+    if (!STATE.matchPlay) {
+      el.innerHTML = `<div class="view-head"><h2>${t.name}</h2><div class="meta">${t.dates}</div></div>
+        <p class="view-note">The Knockout bracket is set once the Group Stage finishes. Complete the <strong>${byKey.finale.name}</strong> first to seed the Group Stage.</p>`;
+      return;
+    }
+    if (!STATE.matchPlay.bracket) {
+      const doneCount = GROUP_LETTERS.filter(l => groupStandings(l).complete).length;
+      el.innerHTML = `<div class="view-head"><h2>${t.name}</h2><div class="meta">${t.dates}</div></div>
+        <p class="view-note">Waiting on the Group Stage — ${doneCount} of 8 groups final. The bracket is set, once, the moment every group is decided.</p>`;
+      return;
+    }
+    const b = STATE.matchPlay.bracket;
+    const allSeeds = STATE.matchPlay.seeds;
+    el.innerHTML = `<div class="view-head"><h2>${t.name}</h2><div class="meta">${t.dates}<br/>16 players &middot; single elimination</div></div>
+      <p class="view-note">Round of 16 pairs each group winner against a runner-up from a different group (1st in A vs 2nd in B, 1st in B vs 2nd in A, and so on), never a repeat of a group-stage match. Click a player to declare them the winner and advance them; click again to undo — this also clears anything already decided further along the bracket for that match. The bracket itself, once every group is final, doesn't change even if you go back and edit a group result.</p>
+      <div class="bracket" id="bracket-host"></div>`;
+    const host = el.querySelector('#bracket-host');
+    const ROUND_LABELS = { r16: 'Round of 16', qf: 'Quarterfinals', sf: 'Semifinals', f: 'Final' };
+    ['r16', 'qf', 'sf', 'f'].forEach(round => {
+      const col = document.createElement('div');
+      col.className = 'bracket-col';
+      col.innerHTML = `<h3>${ROUND_LABELS[round]}</h3>`;
+      b[round].forEach(m => {
+        matchRow(col, m, allSeeds, (winnerName) => {
+          declareBracketWinner(round, m.id, winnerName);
+          renderKnockoutBracket();
+        });
+      });
+      host.appendChild(col);
+    });
+    if (b.f[0] && b.f[0].winner) {
+      host.insertAdjacentHTML('beforeend', `<div class="champion-banner">&#127942; <strong>${b.f[0].winner}</strong> wins the TOUR Championship</div>`);
+    }
+  }
+
   // ---------------- standings (Championship Series points + World Ranking) ----------------
   function addFilter(container, tbody, total) {
     const row = document.createElement('div');
@@ -1398,7 +1648,9 @@
       countEl.textContent = q ? `${shown} / ${total} players` : `${total} players`;
     });
   }
-  function standingsTable(el, rows) {
+  // `cutoffAfter`, when given, drops a labeled divider row right after that
+  // position (e.g. the Championship Series Finale's top-90 cutoff).
+  function standingsTable(el, rows, cutoffAfter, cutoffLabel) {
     const wrap = document.createElement('div');
     wrap.innerHTML = `<div class="table-wrap"><table><thead><tr><th>Pos</th><th>Move</th><th>Player</th><th>Ctry</th><th>Points</th></tr></thead><tbody></tbody></table></div>`;
     const tbody = wrap.querySelector('tbody');
@@ -1407,6 +1659,13 @@
       tr.dataset.name = r.name.toLowerCase();
       tr.innerHTML = `<td class="rk mono">${i + 1}</td><td class="num mono">${movementHtml(r.movement)}</td><td class="name">${r.name}</td><td class="ctry">${r.country || ''}</td><td class="num mono">${r.points.toFixed(2)}</td>`;
       tbody.appendChild(tr);
+      if (cutoffAfter && i + 1 === cutoffAfter && i + 1 < rows.length) {
+        const divider = document.createElement('tr');
+        divider.className = 'cutoff-row';
+        divider.dataset.name = ''; // never matches a name filter, but must exist so addFilter doesn't throw on it
+        divider.innerHTML = `<td colspan="5">${cutoffLabel || `Top ${cutoffAfter} cutoff`}</td>`;
+        tbody.appendChild(divider);
+      }
     });
     const filterRow = document.createElement('div');
     el.appendChild(filterRow);
@@ -1430,9 +1689,9 @@
     const lastKey = lastCompletedTournamentKey();
     attachMovement(rows, lastKey ? computeStandings(lastKey).champ : null, ([, pts]) => pts > 0);
     el.innerHTML = `<div class="view-head"><h2>Championship Series Points</h2><div class="meta">${rows.length} players on the board</div></div>
-      <p class="view-note">Season points from every Championship Series event, THE PLAYERS, and all four majors — recalculated live from whatever's entered in Round 1&ndash;4. Point values follow the <a href="https://en.wikipedia.org/wiki/List_of_point_distributions_of_the_FedEx_Cup" style="color:inherit;">FedEx Cup distribution</a> by tier (Signature-tier for the ${DATA.tournaments.filter(t => t.group === 'champ').length} Championship Series events, Major-tier for majors and THE PLAYERS). Entirely separate from the Challenger Series board — Challenger results never move this one. The Move column shows the shift caused by the last tournament submitted${lastKey ? ` (${byKey[lastKey].name})` : ''}.</p>`;
+      <p class="view-note">Season points from every Championship Series event, THE PLAYERS, and all four majors — recalculated live from whatever's entered in Round 1&ndash;4. Point values follow the <a href="https://en.wikipedia.org/wiki/List_of_point_distributions_of_the_FedEx_Cup" style="color:inherit;">FedEx Cup distribution</a> by tier (Signature-tier for the ${DATA.tournaments.filter(t => t.group === 'champ' && !MATCH_PLAY_KEYS.has(t.key)).length} Championship Series events, Major-tier for majors and THE PLAYERS). Entirely separate from the Challenger Series board — Challenger results never move this one. The Move column shows the shift caused by the last tournament submitted${lastKey ? ` (${byKey[lastKey].name})` : ''}. The top 90 here qualify for the Championship Series Finale; the Group Stage and Knockout that follow it are match play and don't add any more points.</p>`;
     if (!rows.length) { el.innerHTML += '<p class="view-note">No results yet — enter scores in Round 1&ndash;4 to populate this board.</p>'; return; }
-    standingsTable(el, rows);
+    standingsTable(el, rows, 90, 'Championship Series Finale cutoff — top 90 advance');
   }
   function renderWorldRanking() {
     const el = viewContainer('worldranking');
@@ -1627,6 +1886,8 @@
       checkChallengerTriggers();
       checkCompletionLog();
       ensureMajorFields();
+    ensureMatchPlay();
+    ensureKnockoutBracket();
       refreshExport();
       importStatus.textContent = 'Backup restored.';
     });

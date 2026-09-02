@@ -90,9 +90,15 @@ const CHAMP_BY_KEY = new Map(CHAMP_EVENTS.map((e) => [e[0], e]));
 function pushChamp(...keys) {
   keys.forEach((key) => {
     const [, name, dates] = CHAMP_BY_KEY.get(key);
-    tournaments.push({ key, name, dates, group: 'champ', cutSize: cutSizeFor(key) });
+    tournaments.push({ key, name, dates, group: 'champ', field: [], cutSize: cutSizeFor(key) });
   });
 }
+// These three don't get the shared 120-man roster: the Finale's field is the
+// live top 90 in Championship Series points (built client-side, same as a
+// major), and the Group Stage / Knockout aren't stroke-play fields at all —
+// they're a 32-man match-play bracket seeded off the live standings after
+// the Finale.
+const DYNAMIC_CHAMP_KEYS = new Set(['finale', 'matchgroup', 'matchko']);
 
 const tournaments = [];
 const seedScores = {};
@@ -127,7 +133,7 @@ pushChamp('finale', 'matchgroup', 'matchko');
 
 // Champ-group tournaments all share one roster rather than each carrying a copy.
 const roster = championshipRoster();
-tournaments.forEach((t) => { if (t.group === 'champ') t.field = roster; });
+tournaments.forEach((t) => { if (t.group === 'champ' && !DYNAMIC_CHAMP_KEYS.has(t.key)) t.field = roster; });
 // Re-sort into the real chronological order for display — THE PLAYERS and
 // each major slot in right after the event that immediately precedes it.
 const ORDER = ['farmers', 'phoenix', 'pebble', 'genesis', 'miami', 'arnold', 'players', 'houston', 'masters', 'heritage', 'truist', 'pga', 'memorial', 'usopen', 'travelers', 'scottishopen', 'open', 'finale', 'matchgroup', 'matchko'];

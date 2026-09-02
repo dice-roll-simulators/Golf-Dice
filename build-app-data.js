@@ -1,11 +1,8 @@
 'use strict';
 const fs = require('fs');
 const path = require('path');
-const {
-  makeRng, buildWorld, sortedByOwgr, sortedByPgaPts,
-  mastersField, pgaChampField, usOpenField, openChampField, TOP_120,
-} = require('./sim');
-const { RANK_121_200, REAL_EXTRA } = require('./data/players');
+const { makeRng, buildWorld, TOP_120 } = require('./sim');
+const { RANK_121_200, REAL_EXTRA, PAST_CHAMPIONS, NAME_BANK } = require('./data/players');
 const {
   pointsWithTies, owgrTableFor, champTableFor, simulateRoundHoles, cutSizeFor,
   OWGR_MAJOR, OWGR_REGULAR, CHAMP_REGULAR, CHAMP_SIGNATURE, CHAMP_MAJOR,
@@ -26,8 +23,6 @@ reg.byId.forEach((p) => { startingOwgr[p.name] = p.owgr; });
 function fieldOut(field) {
   return field.slice().sort((a, b) => b.owgr - a.owgr).map((p) => ({ name: p.name, country: p.country, tag: p.tag }));
 }
-function weekBefore() { return sortedByOwgr(reg); }
-function pgaBefore() { return sortedByPgaPts(reg); }
 
 // Simulate one tournament end-to-end: rounds 1-2 for the whole field, a cut
 // to the tournament's cut size (place + ties), rounds 3-4 for who survives,
@@ -106,7 +101,11 @@ const simulatedLog = [];
 // --- Jan-Mar: champ events up to and including Pebble Beach (which we simulate) ---
 pushChamp('farmers', 'phoenix', 'pebble', 'genesis', 'miami');
 
-// Simulate Pebble Beach now (first event of the two we're asked to run).
+// Simulate Pebble Beach now — the one pre-seeded demo result. Every major
+// and THE PLAYERS below starts genuinely unplayed (field: []): the client
+// builds each one's field itself, live, off the real World Ranking and
+// Championship Series standings at the moment the tournament immediately
+// before it in the schedule gets locked in — never predetermined here.
 {
   const field = TOP_120.map(([n]) => reg.byName.get(n));
   const result = simulateTournament(field, 'champ', cutSizeFor('pebble'));
@@ -114,38 +113,24 @@ pushChamp('farmers', 'phoenix', 'pebble', 'genesis', 'miami');
   simulatedLog.push({ key: 'pebble', name: 'AT&T Pebble Beach Pro-Am', winner: result.standings[0], missedCut: result.missedCut.length });
 }
 
-// --- THE PLAYERS: field reflects the World Ranking right after Pebble Beach ---
-{
-  const field = weekBefore().slice(0, 156);
-  tournaments.push({ key: 'players', name: 'THE PLAYERS Championship', dates: 'Mar 16–19', group: 'players', field: fieldOut(field), cutSize: cutSizeFor('players') });
-}
-
-pushChamp('arnold', 'houston');
-
-// --- Masters: field built from post-Pebble-Beach ranking + points, then simulated ---
-{
-  const built = mastersField(reg, weekBefore(), pgaBefore(), rng, YEAR);
-  tournaments.push({ key: 'masters', name: 'Masters Tournament', dates: 'Apr 13–16', group: 'major', field: fieldOut(built.field), target: built.target, categories: built.categories, cutSize: cutSizeFor('masters') });
-  const result = simulateTournament(built.field, 'major', cutSizeFor('masters'));
-  seedScores.masters = result.scores;
-  simulatedLog.push({ key: 'masters', name: 'Masters Tournament', winner: result.standings[0], missedCut: result.missedCut.length });
-}
-
-pushChamp('heritage', 'truist', 'memorial', 'travelers');
-
-const majorMeta = { pga: ['PGA Championship', 'May 25–28'], usopen: ['U.S. Open', 'Jun 22–25'], open: ['The Open Championship', 'Jul 20–23'] };
-[['pga', pgaChampField], ['usopen', usOpenField], ['open', openChampField]].forEach(([key, fn]) => {
-  const built = fn(reg, weekBefore(), rng, YEAR);
-  tournaments.push({ key, name: majorMeta[key][0], dates: majorMeta[key][1], group: 'major', field: fieldOut(built.field), categories: built.categories, cutSize: cutSizeFor(key) });
-});
-
-pushChamp('scottishopen', 'finale', 'matchgroup', 'matchko');
+pushChamp('arnold');
+tournaments.push({ key: 'players', name: 'THE PLAYERS Championship', dates: 'Mar 16–19', group: 'players', field: [], cutSize: cutSizeFor('players') });
+pushChamp('houston');
+tournaments.push({ key: 'masters', name: 'Masters Tournament', dates: 'Apr 13–16', group: 'major', field: [], cutSize: cutSizeFor('masters') });
+pushChamp('heritage', 'truist');
+tournaments.push({ key: 'pga', name: 'PGA Championship', dates: 'May 25–28', group: 'major', field: [], cutSize: cutSizeFor('pga') });
+pushChamp('memorial');
+tournaments.push({ key: 'usopen', name: 'U.S. Open', dates: 'Jun 22–25', group: 'major', field: [], cutSize: cutSizeFor('usopen') });
+pushChamp('travelers', 'scottishopen');
+tournaments.push({ key: 'open', name: 'The Open Championship', dates: 'Jul 20–23', group: 'major', field: [], cutSize: cutSizeFor('open') });
+pushChamp('finale', 'matchgroup', 'matchko');
 
 // Champ-group tournaments all share one roster rather than each carrying a copy.
 const roster = championshipRoster();
 tournaments.forEach((t) => { if (t.group === 'champ') t.field = roster; });
-// Re-sort into the real chronological order for display.
-const ORDER = ['farmers', 'phoenix', 'pebble', 'genesis', 'miami', 'players', 'arnold', 'houston', 'masters', 'heritage', 'truist', 'memorial', 'travelers', 'pga', 'usopen', 'open', 'scottishopen', 'finale', 'matchgroup', 'matchko'];
+// Re-sort into the real chronological order for display — THE PLAYERS and
+// each major slot in right after the event that immediately precedes it.
+const ORDER = ['farmers', 'phoenix', 'pebble', 'genesis', 'miami', 'arnold', 'players', 'houston', 'masters', 'heritage', 'truist', 'pga', 'memorial', 'usopen', 'travelers', 'scottishopen', 'open', 'finale', 'matchgroup', 'matchko'];
 tournaments.sort((a, b) => ORDER.indexOf(a.key) - ORDER.indexOf(b.key));
 
 // Champ events all share one `field` array/order (the roster, by ranking) —
@@ -175,6 +160,13 @@ const appData = {
   seedLocked: Object.fromEntries(Object.keys(seedScores).map((key) => [key, { r1: true, r2: true, r3: true, r4: true }])),
   startingOwgr,
   pointTables: { owgrMajor: OWGR_MAJOR, owgrRegular: OWGR_REGULAR, champRegular: CHAMP_REGULAR, champSignature: CHAMP_SIGNATURE, champMajor: CHAMP_MAJOR },
+  // Raw ingredients for the client's own live major/THE PLAYERS field
+  // construction — past-champion exemptions and the fictional PGA
+  // Championship club-pro name bank. The ranking/points portion of each
+  // field is built from the live World Ranking/Championship Series
+  // standings instead, computed client-side when it's actually needed.
+  pastChampions: PAST_CHAMPIONS,
+  clubProNames: NAME_BANK,
 };
 
 fs.writeFileSync(path.join(__dirname, 'output', 'app-data.json'), JSON.stringify(appData));

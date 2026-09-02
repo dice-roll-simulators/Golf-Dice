@@ -43,6 +43,7 @@
   .nav-btn.active{ background:var(--accent); color:#fff; font-weight:600; }
   :root[data-theme="dark"] .nav-btn.active, :root:not([data-theme="light"]) .nav-btn.active{ color:#0c1a15; }
   .nav-btn .badge{ font-family:'IBM Plex Mono',monospace; font-size:10px; opacity:0.75; }
+  .nav-btn.nav-major span{ font-weight:700; font-style:italic; }
 
   /* main */
   .main{ flex:1; min-width:0; padding:36px 40px 80px; overflow-x:hidden; }
@@ -187,6 +188,7 @@
     return {
       scores: {}, roundLocked: {}, roundSelections: { r1: null, r2: null, r3: null, r4: null }, diceLog: { d1: [], d2: [], d3: [], d4: [] },
       challengerLog: [], challengerResults: [], challengerRefreshed: [], completionLog: [],
+      majorFields: {}, legacyStartingOwgr: {},
     };
   }
   let STATE = defaultState();
@@ -212,6 +214,213 @@
   DATA.tournaments.forEach(t => t.field.forEach(p => NAME_INDEX.set(p.name, p.country)));
   DATA.backgroundPool.forEach(p => NAME_INDEX.set(p.name, p.country));
 
+  // ---------------- live major / THE PLAYERS field construction ----------------
+  // THE PLAYERS and the four majors no longer ship with a predetermined
+  // field — each one is built here, live, off the real World Ranking and
+  // Championship Series standings, the moment the event immediately before
+  // it in the schedule is locked in. The random categories (past champions,
+  // PGA Championship club pros) work exactly as before; only the "top N
+  // ranking/points" portion is now a genuine snapshot instead of a fixed
+  // pre-season one.
+  const ALL_PLAYERS = (() => {
+    const champT = DATA.tournaments.find(t => t.group === 'champ');
+    return [...champT.field, ...DATA.backgroundPool];
+  })();
+  const ALL_PLAYERS_BY_NAME = new Map(ALL_PLAYERS.map(p => [p.name, p]));
+  const EU_COUNTRIES = ["ENG", "SCO", "IRL", "WAL", "FRA", "GER", "SWE", "ESP", "ITA", "NOR", "DEN", "BEL", "NED", "AUT", "FIN"];
+  // The event that must be locked in before each field can be built.
+  const PRECEDING_EVENT = { players: 'arnold', masters: 'houston', pga: 'truist', usopen: 'memorial', open: 'scottishopen' };
+
+  function fieldIsReady(tKey) {
+    const t = byKey[tKey];
+    return !!(t && t.field && t.field.length > 0);
+  }
+  function precedingEventReady(tKey) {
+    const pKey = PRECEDING_EVENT[tKey];
+    return !!(pKey && isTournamentComplete(pKey));
+  }
+  // Shared explanation shown wherever a major/THE PLAYERS field isn't built
+  // yet, naming the specific event that has to be locked in first.
+  function fieldPendingNote(tKey) {
+    const pKey = PRECEDING_EVENT[tKey];
+    const pName = pKey && byKey[pKey] ? byKey[pKey].name : 'the previous event';
+    return `The field hasn't been set yet — it's built live from the World Ranking and Championship Series standings the moment <strong>${pName}</strong> is locked in (Leaderboard tab &rarr; Lock scores). Come back once that's done.`;
+  }
+  // Once a major/THE PLAYERS field IS set, explains exactly what it's made
+  // of — the random categories (past champions, club pros) plus the live
+  // ranking/points cutoffs, snapshotted right when the preceding event
+  // was confirmed.
+  function fieldMakeupNote(t) {
+    const pKey = PRECEDING_EVENT[t.key];
+    const pName = pKey && byKey[pKey] ? byKey[pKey].name : null;
+    const NOTES = {
+      players: 'the top 156 in World Ranking.',
+      masters: `the top 50 in World Ranking, the top 30 in Championship Series points, exempt past champions, and a random fill out to a field of ${t.target || 95}.`,
+      pga: 'the top 120 in World Ranking, up to 10 exempt past champions, and 20 simulated PGA Championship club professionals.',
+      usopen: 'the top 100 in World Ranking, exempt past champions, and a USA-weighted random fill to 150.',
+      open: 'the top 100 in World Ranking, exempt past champions, and a Europe-weighted random fill to 150.',
+    };
+    const body = NOTES[t.key];
+    if (!body || !pName) return '';
+    return `<p class="view-note">Field locked in the moment <strong>${pName}</strong> was confirmed complete: ${body}</p>`;
+  }
+  // A stable display order — same convention as the Championship roster's
+  // fixed field order — superseded everywhere it's actually shown by live
+  // sort-by-score / movement arrows.
+  function fieldOut(list) {
+    return list.slice()
+      .sort((a, b) => (DATA.startingOwgr[b.name] || 0) - (DATA.startingOwgr[a.name] || 0))
+      .map(p => ({ name: p.name, country: p.country, tag: p.tag || 'tour' }));
+  }
+  // A name already in the 420-player universe keeps its real record; only a
+  // genuine former-champion "legacy" name gets a synthetic stub, with a
+  // small stable starting World Ranking average persisted so it doesn't
+  // jitter across reloads.
+  function pastChampionEntry(name, country) {
+    const existing = ALL_PLAYERS_BY_NAME.get(name);
+    if (existing) return existing;
+    if (!(name in STATE.legacyStartingOwgr)) {
+      STATE.legacyStartingOwgr[name] = Math.round((0.05 + Math.random() * 0.3) * 10000) / 10000;
+      saveState();
+    }
+    if (!(name in DATA.startingOwgr)) DATA.startingOwgr[name] = STATE.legacyStartingOwgr[name];
+    NAME_INDEX.set(name, country);
+    return { name, country, tag: 'legacy' };
+  }
+  function pickBiasedIdx(pool, matchFn, biasProb) {
+    const wantMatch = Math.random() < biasProb;
+    for (let attempts = 0; attempts < 40; attempts++) {
+      const idx = Math.floor(Math.random() * pool.length);
+      if (matchFn(pool[idx]) === wantMatch) return idx;
+    }
+    return Math.floor(Math.random() * pool.length);
+  }
+  // Fills `set` (name -> player) up to `targetTotal` by drawing randomly
+  // (optionally nationality-biased) from the full 420-player universe,
+  // skipping anyone already in `set`.
+  function randomFillClient(set, targetTotal, bias) {
+    const pool = ALL_PLAYERS.filter(p => !set.has(p.name));
+    const isEU = (c) => EU_COUNTRIES.includes(c);
+    while (set.size < targetTotal && pool.length) {
+      let idx;
+      if (bias === 'US') idx = pickBiasedIdx(pool, p => p.country === 'USA', 0.75);
+      else if (bias === 'EU') idx = pickBiasedIdx(pool, p => isEU(p.country), 0.7);
+      else idx = Math.floor(Math.random() * pool.length);
+      const [chosen] = pool.splice(idx, 1);
+      set.set(chosen.name, chosen);
+    }
+  }
+  function shuffledClient(list) {
+    const out = list.slice();
+    for (let i = out.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [out[i], out[j]] = [out[j], out[i]];
+    }
+    return out;
+  }
+  // The live World Ranking / Championship Series order across the full
+  // 420-player universe, as of right after `upToKey` was locked in.
+  function liveFieldRankings(upToKey) {
+    const { owgr, champ } = computeStandings(undefined, upToKey);
+    const byOwgr = ALL_PLAYERS.slice().sort((a, b) => (owgr[b.name] || 0) - (owgr[a.name] || 0));
+    const byChamp = ALL_PLAYERS.slice().sort((a, b) => (champ[b.name] || 0) - (champ[a.name] || 0));
+    return { byOwgr, byChamp };
+  }
+  function buildPlayersField(upToKey) {
+    const { byOwgr } = liveFieldRankings(upToKey);
+    return { field: byOwgr.slice(0, 156), categories: { ranking: 156 } };
+  }
+  function buildMastersField(upToKey) {
+    const { byOwgr, byChamp } = liveFieldRankings(upToKey);
+    const set = new Map();
+    byOwgr.slice(0, 50).forEach(p => set.set(p.name, p));
+    byChamp.slice(0, 30).forEach(p => set.set(p.name, p));
+    DATA.pastChampions.masters.forEach(([name, by, country]) => {
+      if (DATA.year - by < 70) set.set(name, pastChampionEntry(name, country));
+    });
+    const target = 90 + Math.floor(Math.random() * 11); // 90-100
+    randomFillClient(set, target, null);
+    return { field: Array.from(set.values()), target, categories: { ranking: 50, pgaPoints: 30 } };
+  }
+  function buildPgaField(upToKey) {
+    const { byOwgr } = liveFieldRankings(upToKey);
+    const set = new Map();
+    byOwgr.slice(0, 120).forEach(p => set.set(p.name, p));
+    const under60 = DATA.pastChampions.pga.filter(([, by]) => DATA.year - by < 60);
+    const pickList = under60.length >= 10 ? under60 : DATA.pastChampions.pga.filter(([, by]) => DATA.year - by < 70);
+    pickList.slice(0, 10).forEach(([name, by, country]) => set.set(name, pastChampionEntry(name, country)));
+    for (let i = 0; i < 20; i++) {
+      let name;
+      do {
+        const f = DATA.clubProNames.clubPro[Math.floor(Math.random() * DATA.clubProNames.clubPro.length)];
+        const l = DATA.clubProNames.clubProLast[Math.floor(Math.random() * DATA.clubProNames.clubProLast.length)];
+        name = `${f} ${l}`;
+      } while (set.has(name) || ALL_PLAYERS_BY_NAME.has(name));
+      set.set(name, { name, country: 'USA', tag: 'clubpro' });
+    }
+    return { field: Array.from(set.values()), categories: { ranking: 120, pastChamps: pickList.slice(0, 10).length, clubPros: 20 } };
+  }
+  function buildUsOpenField(upToKey) {
+    const { byOwgr } = liveFieldRankings(upToKey);
+    const set = new Map();
+    byOwgr.slice(0, 100).forEach(p => set.set(p.name, p));
+    DATA.pastChampions.usopen.forEach(([name, by, country]) => {
+      if (DATA.year - by < 70) set.set(name, pastChampionEntry(name, country));
+    });
+    randomFillClient(set, 150, 'US');
+    return { field: Array.from(set.values()), categories: { ranking: 100 } };
+  }
+  function buildOpenField(upToKey) {
+    const { byOwgr } = liveFieldRankings(upToKey);
+    const set = new Map();
+    byOwgr.slice(0, 100).forEach(p => set.set(p.name, p));
+    DATA.pastChampions.open.forEach(([name, by, country]) => {
+      if (DATA.year - by < 70) set.set(name, pastChampionEntry(name, country));
+    });
+    randomFillClient(set, 150, 'EU');
+    return { field: Array.from(set.values()), categories: { ranking: 100 } };
+  }
+  const MAJOR_FIELD_BUILDERS = { players: buildPlayersField, masters: buildMastersField, pga: buildPgaField, usopen: buildUsOpenField, open: buildOpenField };
+
+  // Builds (once) and persists each major/THE PLAYERS field the moment the
+  // event right before it is locked in. A field, once built, never changes —
+  // like a real major's exemption list is set once qualifying closes, not
+  // reshuffled as the tournament itself plays out.
+  function ensureMajorFields() {
+    let changed = false;
+    Object.keys(MAJOR_FIELD_BUILDERS).forEach(tKey => {
+      const t = byKey[tKey];
+      if (!t) return;
+      if (STATE.majorFields[tKey]) {
+        // Rehydrate from a prior session — DATA is rebuilt fresh from the
+        // static JSON every load, so the generated field itself lives here.
+        if (!t.field || t.field.length === 0) {
+          const saved = STATE.majorFields[tKey];
+          t.field = saved.field;
+          t.target = saved.target;
+          t.categories = saved.categories;
+          t.startOrder = saved.startOrder;
+          saved.field.forEach(p => NAME_INDEX.set(p.name, p.country));
+        }
+        return;
+      }
+      if (t.field && t.field.length > 0) return; // already built this session
+      if (!precedingEventReady(tKey)) return;
+      const built = MAJOR_FIELD_BUILDERS[tKey](PRECEDING_EVENT[tKey]);
+      const orderedField = fieldOut(built.field);
+      const startOrder = shuffledClient(orderedField).map(p => p.name);
+      t.field = orderedField;
+      t.target = built.target;
+      t.categories = built.categories;
+      t.startOrder = startOrder;
+      orderedField.forEach(p => NAME_INDEX.set(p.name, p.country));
+      STATE.majorFields[tKey] = { field: orderedField, target: built.target, categories: built.categories, startOrder };
+      changed = true;
+    });
+    if (changed) saveState();
+    return changed;
+  }
+
   // Seed the two simulated results in on first run only — never overwrite a
   // returning visitor's own entered scores.
   if (Object.keys(STATE.scores).length === 0 && DATA.seedScores) {
@@ -221,6 +430,7 @@
   }
   checkChallengerTriggers(); // catches anything already complete (e.g. the seeded Pebble Beach result)
   checkCompletionLog();
+  ensureMajorFields();
 
   function pointsForRank(anchors, rank) {
     if (rank < anchors[0][0]) return anchors[0][1];
@@ -372,6 +582,7 @@
     saveState();
     checkChallengerTriggers();
     checkCompletionLog();
+    ensureMajorFields();
   }
   // Wipes a tournament back to unplayed — scores, round locks, and its
   // Challenger Series companion event (if one has auto-run off it) — so a
@@ -467,12 +678,24 @@
   // its Challenger Series companion, if any) entirely — this is how the
   // Standings tabs reconstruct "the rankings right before that submission"
   // without needing a stored snapshot.
-  function computeStandings(excludeKey) {
+  // `upToKey`, when given, restricts the whole computation to tournaments at
+  // or before that key's position in the schedule — this is what lets major
+  // field construction ask "what did the standings look like right after
+  // event X" rather than "what do they look like right now" (which could
+  // already include later tournaments the player happened to enter first).
+  function computeStandings(excludeKey, upToKey) {
+    const upToIdx = upToKey ? DATA.tournaments.findIndex(t => t.key === upToKey) : -1;
+    const withinScope = (key) => {
+      if (!upToKey) return true;
+      const idx = DATA.tournaments.findIndex(t => t.key === key);
+      return idx !== -1 && idx <= upToIdx;
+    };
     const owgrTotal = {};
     Object.entries(DATA.startingOwgr).forEach(([name, avg]) => { owgrTotal[name] = avg * OWGR_DIVISOR; });
     const champ = {};
     DATA.tournaments.forEach(t => {
       if (t.key === excludeKey) return;
+      if (!withinScope(t.key)) return;
       const sc = STATE.scores[t.key];
       if (!sc) return;
       const cut = computeCut(t.key);
@@ -496,6 +719,7 @@
     const challenger = {};
     STATE.challengerResults.forEach(ev => {
       if (ev.triggerKey === excludeKey) return;
+      if (!withinScope(ev.triggerKey)) return;
       ev.result.forEach(r => {
         owgrTotal[r.name] = (owgrTotal[r.name] || 0) + r.owgrPts;
         challenger[r.name] = (challenger[r.name] || 0) + r.challengerPts;
@@ -531,8 +755,11 @@
   NAV.push({ group: 'Score Entry', items: [1, 2, 3, 4].map(n => ({ key: 'round' + n, label: 'Round ' + n })) });
   NAV.push({ group: 'Standings', items: [{ key: 'champpoints', label: 'Championship Series' }, { key: 'worldranking', label: 'World Ranking' }] });
   NAV.push({ group: 'Challenger Series', items: [{ key: 'challengertournament', label: 'Challenger Series Tournament' }, { key: 'challengerstandings', label: 'Challenger Series Standings' }] });
-  NAV.push({ group: 'Championship Series', items: DATA.tournaments.filter(t => t.group === 'champ').map(t => ({ key: 'lb-' + t.key, label: t.name })) });
-  NAV.push({ group: 'Majors & Players', items: DATA.tournaments.filter(t => t.group !== 'champ').map(t => ({ key: 'lb-' + t.key, label: t.name })) });
+  // One combined schedule, in real chronological order — THE PLAYERS and
+  // each major sit right where they fall in the season rather than off in
+  // their own section; `major: true` just italicizes the label so they
+  // still read as different from a Championship Series week at a glance.
+  NAV.push({ group: 'Schedule', items: DATA.tournaments.map(t => ({ key: 'lb-' + t.key, label: t.name, major: t.group !== 'champ' })) });
   NAV.push({ group: 'Reference', items: [{ key: 'reference', label: 'Depth Pool' }] });
   NAV.push({ group: 'Data', items: [{ key: 'data', label: 'Save / Load' }] });
 
@@ -546,8 +773,9 @@
     wrap.appendChild(label);
     section.items.forEach(item => {
       const btn = document.createElement('button');
-      btn.className = 'nav-btn';
+      btn.className = 'nav-btn' + (item.major ? ' nav-major' : '');
       btn.dataset.view = item.key;
+      if (item.major) btn.title = 'Major / THE PLAYERS';
       btn.innerHTML = `<span>${item.label}</span>`;
       btn.addEventListener('click', () => selectView(item.key));
       wrap.appendChild(btn);
@@ -711,10 +939,13 @@
         <div id="picker-${key}"></div>
       </div>
       <div id="round-body-${key}"></div>`;
+    // A major/THE PLAYERS whose field hasn't been built yet has no one to
+    // enter scores for — leave it out of the picker until it's ready
+    // (its Leaderboard tab explains what still needs to be locked in first).
     const groups = ['champ', 'players', 'major'].map(g => ({
       label: GROUP_LABEL[g],
-      items: DATA.tournaments.filter(t => t.group === g).map(t => ({ value: t.key, label: t.name })),
-    }));
+      items: DATA.tournaments.filter(t => t.group === g && (g === 'champ' || fieldIsReady(t.key))).map(t => ({ value: t.key, label: t.name })),
+    })).filter(g => g.items.length > 0);
     const pickerHost = el.querySelector('#picker-' + key);
     pickerHost.appendChild(createDropdown(groups, selected || '', '— choose a tournament —', (value) => {
       STATE.roundSelections[selKey] = value || null;
@@ -833,6 +1064,7 @@
     const body = document.getElementById('round-body-' + domKey);
     if (!tKey) { body.innerHTML = '<p class="view-note">Pick a tournament above to load its field.</p>'; return; }
     const t = byKey[tKey];
+    if (!t.field || t.field.length === 0) { body.innerHTML = `<p class="view-note">${fieldPendingNote(tKey)}</p>`; return; }
     if (!STATE.scores[tKey]) STATE.scores[tKey] = {};
     for (let i = 1; i <= n; i++) if (!STATE.scores[tKey]['r' + i]) STATE.scores[tKey]['r' + i] = {};
     const roundScores = STATE.scores[tKey]['r' + n];
@@ -901,6 +1133,7 @@
           saveState();
           checkChallengerTriggers();
           checkCompletionLog();
+          ensureMajorFields();
           draw();
           if (currentView === 'lb-' + tKey) renderLeaderboard(tKey);
         });
@@ -994,6 +1227,11 @@
   function renderLeaderboard(tKey) {
     const el = viewContainer('lb-' + tKey);
     const t = byKey[tKey];
+    if (!t.field || t.field.length === 0) {
+      el.innerHTML = `<div class="view-head"><h2>${t.name}</h2><div class="meta">${t.dates}</div></div>
+        <p class="view-note">${fieldPendingNote(tKey)}</p>`;
+      return;
+    }
     const cut = computeCut(tKey);
     // Each tournament has its own randomised draw order (t.startOrder, built
     // server-side) rather than every event listing the same roster order.
@@ -1036,6 +1274,7 @@
     controlRow.style.marginBottom = '10px';
     el.appendChild(controlRow);
     el.insertAdjacentHTML('beforeend', `<p class="view-note">Live from whatever's been entered in Round 1&ndash;4 for this tournament — refreshes automatically as scores come in. Click "Pos." to sort by score, or a round header (R1&ndash;R4) to sort by that round, with ties shown as "T". Players outside the cut line score 0 toward the Championship Series and World Ranking. The Move column shows how a player's position changed once the most recently locked round was submitted, versus the round before it. WR pts is how many World Ranking points that finish is worth right now, tie-shared the same way the World Ranking tab totals them.</p>`);
+    el.insertAdjacentHTML('beforeend', fieldMakeupNote(t));
     const tableHost = document.createElement('div');
     el.appendChild(tableHost);
 
@@ -1387,6 +1626,7 @@
       saveState();
       checkChallengerTriggers();
       checkCompletionLog();
+      ensureMajorFields();
       refreshExport();
       importStatus.textContent = 'Backup restored.';
     });

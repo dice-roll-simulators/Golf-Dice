@@ -236,6 +236,32 @@
     if (!(key in STATE.challengerRefreshCounts)) STATE.challengerRefreshCounts[key] = 1;
   });
 
+  // One-time data-quality fix: "Im Sung-jae" in the old depth pool was a
+  // duplicate of Sungjae Im (already in the fixed 120) under his Korean
+  // name order. He's gone from the pool now — erase him from any
+  // already-generated Challenger Series result too, rather than replacing
+  // him, closing the gap so everyone who finished below him moves up one
+  // place (and gets that place's real points). Idempotent: no-ops once
+  // he's no longer found in any stored result.
+  (function removeDuplicatePlayerFromChallengerHistory(name) {
+    let changed = false;
+    STATE.challengerResults.forEach(ev => {
+      const idx = ev.result.findIndex(r => r.name === name);
+      if (idx === -1) return;
+      ev.result.splice(idx, 1);
+      const owgrTable = DATA.pointTables.owgrRegular;
+      const champTable = DATA.pointTables.champSignature;
+      ev.result.forEach((r, i) => {
+        r.rank = i + 1;
+        r.owgrPts = pointsForRank(owgrTable, r.rank) * 0.5;
+        r.challengerPts = pointsForRank(champTable, r.rank);
+      });
+      ev.fieldSize = ev.result.length;
+      changed = true;
+    });
+    if (changed) saveState();
+  })('Im Sung-jae');
+
   const byKey = Object.fromEntries(DATA.tournaments.map(t => [t.key, t]));
 
   // Drop any round selection pointing at a tournament key that no longer

@@ -140,7 +140,7 @@ const REAL_EXTRA = [
   ["Mark Anderson","USA"],["Chris Baker","USA"],["Robert Streb","USA"],["Vince Covello","USA"],["Michael Gellerman","USA"],
   ["Tyler McCumber","USA"],["Richy Werenski","USA"],["D. J. Trahan","USA"],["Zhang Xinjun","CHN"],["Tom Lewis","ENG"],
   ["Fabián Gómez","ARG"],["Nelson Ledesma","ARG"],["Anirban Lahiri","IND"],["Rhein Gibson","AUS"],["Cameron Davis","AUS"],
-  ["Cameron Percy","AUS"],["David Hearn","CAN"],["Sebastian Cappelen","DEN"],["Tim Wilkinson","NZL"],["Im Sung-jae","KOR"],
+  ["Cameron Percy","AUS"],["David Hearn","CAN"],["Sebastian Cappelen","DEN"],["Tim Wilkinson","NZL"],
   ["Bae Sang-moon","KOR"],["Peter Malnati","USA"],["Scott Langley","USA"],["Cameron Champ","USA"],["Martin Trainer","USA"],
   ["Lee Kyoung-hoon","KOR"],["Matt Jones","AUS"],["Chase Wright","USA"],["Hunter Mahan","USA"],["Sebastián Muñoz","COL"],
   ["Kyle Jones","USA"],["Shawn Stefani","USA"],["Alex Prugh","USA"],["John Chin","USA"],["Roberto Díaz","MEX"],

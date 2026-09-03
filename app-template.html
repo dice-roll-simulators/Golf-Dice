@@ -1882,20 +1882,26 @@
   }
   // `cutoffAfter`, when given, drops a labeled divider row right after that
   // position (e.g. the Championship Series Finale's top-90 cutoff).
-  function standingsTable(el, rows, cutoffAfter, cutoffLabel) {
+  // `showCareerStats`, when true, adds Wins/Top 10 columns off each row's
+  // `.wins`/`.top10` (counts of actual finishes in the tournament tabs so
+  // far — see computeCareerStats/computeChallengerCareerStats).
+  function standingsTable(el, rows, cutoffAfter, cutoffLabel, showCareerStats) {
     const wrap = document.createElement('div');
-    wrap.innerHTML = `<div class="table-wrap"><table><thead><tr><th>Pos</th><th>Move</th><th>Player</th><th>Ctry</th><th>Points</th></tr></thead><tbody></tbody></table></div>`;
+    const extraHead = showCareerStats ? '<th>Wins</th><th>Top 10</th>' : '';
+    wrap.innerHTML = `<div class="table-wrap"><table><thead><tr><th>Pos</th><th>Move</th><th>Player</th><th>Ctry</th><th>Points</th>${extraHead}</tr></thead><tbody></tbody></table></div>`;
     const tbody = wrap.querySelector('tbody');
+    const colCount = showCareerStats ? 7 : 5;
     rows.forEach((r, i) => {
       const tr = document.createElement('tr');
       tr.dataset.name = r.name.toLowerCase();
-      tr.innerHTML = `<td class="rk mono">${i + 1}</td><td class="num mono">${movementHtml(r.movement)}</td><td class="name">${r.name}</td><td class="ctry">${r.country || ''}</td><td class="num mono">${r.points.toFixed(2)}</td>`;
+      const extraCells = showCareerStats ? `<td class="num mono">${r.wins || 0}</td><td class="num mono">${r.top10 || 0}</td>` : '';
+      tr.innerHTML = `<td class="rk mono">${i + 1}</td><td class="num mono">${movementHtml(r.movement)}</td><td class="name">${r.name}</td><td class="ctry">${r.country || ''}</td><td class="num mono">${r.points.toFixed(2)}</td>${extraCells}`;
       tbody.appendChild(tr);
       if (cutoffAfter && i + 1 === cutoffAfter && i + 1 < rows.length) {
         const divider = document.createElement('tr');
         divider.className = 'cutoff-row';
         divider.dataset.name = ''; // never matches a name filter, but must exist so addFilter doesn't throw on it
-        divider.innerHTML = `<td colspan="5">${cutoffLabel || `Top ${cutoffAfter} cutoff`}</td>`;
+        divider.innerHTML = `<td colspan="${colCount}">${cutoffLabel || `Top ${cutoffAfter} cutoff`}</td>`;
         tbody.appendChild(divider);
       }
     });
@@ -1903,6 +1909,53 @@
     el.appendChild(filterRow);
     el.appendChild(wrap);
     addFilter(filterRow, tbody, rows.length);
+  }
+  // Wins and top-10 finishes across every COMPLETE (locked) Championship
+  // Series event, THE PLAYERS, and the majors — match play isn't a
+  // stroke-play finish, so the Group Stage/Knockout don't count, and a
+  // still-in-progress tournament doesn't count until it's actually decided.
+  // Positions honor a resolved playoff the same way points do (a broken tie
+  // credits one win, not two).
+  function computeCareerStats() {
+    const wins = {}, top10 = {};
+    DATA.tournaments.forEach(t => {
+      if (MATCH_PLAY_KEYS.has(t.key)) return;
+      if (!isTournamentComplete(t.key)) return;
+      const cut = computeCut(t.key);
+      const rows = t.field.map(p => {
+        if (cut && cut.missedCut.has(p.name)) return null;
+        const rounds = [1, 2, 3, 4].map(n => roundValue(t.key, n, p.name));
+        if (rounds.some(v => v === null)) return null;
+        return { name: p.name, total: rounds.reduce((a, b) => a + b, 0) };
+      }).filter(Boolean);
+      rows.sort((a, b) => a.total - b.total || compareBySurname(a.name, b.name));
+      const ranked = applyPlayoffOrder(t.key, rows, r => r.name);
+      let i = 0;
+      while (i < ranked.length) {
+        let j = i;
+        while (j + 1 < ranked.length && ranked[j + 1].total === ranked[i].total) j++;
+        const pos = i + 1;
+        for (let k = i; k <= j; k++) {
+          const name = ranked[k].name;
+          if (pos === 1) wins[name] = (wins[name] || 0) + 1;
+          if (pos <= 10) top10[name] = (top10[name] || 0) + 1;
+        }
+        i = j + 1;
+      }
+    });
+    return { wins, top10 };
+  }
+  // Same idea for the Challenger Series — every auto-run event already
+  // produces a strict 1..N rank with no ties, so this is a direct tally.
+  function computeChallengerCareerStats() {
+    const wins = {}, top10 = {};
+    STATE.challengerResults.forEach(ev => {
+      ev.result.forEach(r => {
+        if (r.rank === 1) wins[r.name] = (wins[r.name] || 0) + 1;
+        if (r.rank <= 10) top10[r.name] = (top10[r.name] || 0) + 1;
+      });
+    });
+    return { wins, top10 };
   }
   // Both boards' movement arrows compare "now" to "right before the most
   // recently submitted tournament" — reconstructed by rolling that one
@@ -1914,16 +1967,17 @@
   function renderChampPoints() {
     const el = viewContainer('champpoints');
     const { champ } = computeStandings();
+    const { wins, top10 } = computeCareerStats();
     const rows = Object.entries(champ)
       .filter(([, pts]) => pts > 0)
-      .map(([name, pts]) => ({ name, country: NAME_INDEX.get(name), points: pts }))
+      .map(([name, pts]) => ({ name, country: NAME_INDEX.get(name), points: pts, wins: wins[name] || 0, top10: top10[name] || 0 }))
       .sort((a, b) => b.points - a.points);
     const lastKey = lastCompletedTournamentKey();
     attachMovement(rows, lastKey ? computeStandings(lastKey).champ : null, ([, pts]) => pts > 0);
     el.innerHTML = `<div class="view-head"><h2>Championship Series Points</h2><div class="meta">${rows.length} players on the board</div></div>
-      <p class="view-note">Season points from every Championship Series event, THE PLAYERS, and all four majors — recalculated live from whatever's entered in Round 1&ndash;4. Point values follow the <a href="https://en.wikipedia.org/wiki/List_of_point_distributions_of_the_FedEx_Cup" style="color:inherit;">FedEx Cup distribution</a> by tier (Signature-tier for the ${DATA.tournaments.filter(t => t.group === 'champ' && !MATCH_PLAY_KEYS.has(t.key)).length} Championship Series events, Major-tier for majors and THE PLAYERS). Entirely separate from the Challenger Series board — Challenger results never move this one. The Move column shows the shift caused by the last tournament submitted${lastKey ? ` (${byKey[lastKey].name})` : ''}. The top 90 here qualify for the Championship Series Finale; the Group Stage and Knockout that follow it are match play and don't add any more points.</p>`;
+      <p class="view-note">Season points from every Championship Series event, THE PLAYERS, and all four majors — recalculated live from whatever's entered in Round 1&ndash;4. Point values follow the <a href="https://en.wikipedia.org/wiki/List_of_point_distributions_of_the_FedEx_Cup" style="color:inherit;">FedEx Cup distribution</a> by tier (Signature-tier for the ${DATA.tournaments.filter(t => t.group === 'champ' && !MATCH_PLAY_KEYS.has(t.key)).length} Championship Series events, Major-tier for majors and THE PLAYERS). Entirely separate from the Challenger Series board — Challenger results never move this one. The Move column shows the shift caused by the last tournament submitted${lastKey ? ` (${byKey[lastKey].name})` : ''}. Wins and Top 10 count actual finishes from completed, locked tournaments only (a resolved playoff credits one win, not a tie). The top 90 here qualify for the Championship Series Finale; the Group Stage and Knockout that follow it are match play and don't add any more points.</p>`;
     if (!rows.length) { el.innerHTML += '<p class="view-note">No results yet — enter scores in Round 1&ndash;4 to populate this board.</p>'; return; }
-    standingsTable(el, rows, 90, 'Championship Series Finale cutoff — top 90 advance');
+    standingsTable(el, rows, 90, 'Championship Series Finale cutoff — top 90 advance', true);
   }
   function renderWorldRanking() {
     const el = viewContainer('worldranking');
@@ -1983,16 +2037,17 @@
   function renderChallengerStandings() {
     const el = viewContainer('challengerstandings');
     const { challenger } = computeStandings();
+    const { wins, top10 } = computeChallengerCareerStats();
     const rows = Object.entries(challenger)
       .filter(([, pts]) => pts > 0)
-      .map(([name, pts]) => ({ name, country: NAME_INDEX.get(name), points: pts }))
+      .map(([name, pts]) => ({ name, country: NAME_INDEX.get(name), points: pts, wins: wins[name] || 0, top10: top10[name] || 0 }))
       .sort((a, b) => b.points - a.points);
     const lastChallengerKey = STATE.challengerLog.length ? STATE.challengerLog[STATE.challengerLog.length - 1] : null;
     attachMovement(rows, lastChallengerKey ? computeStandings(lastChallengerKey).challenger : null, ([, pts]) => pts > 0);
     el.innerHTML = `<div class="view-head"><h2>Challenger Series Standings</h2><div class="meta">${rows.length} players on the board</div></div>
-      <p class="view-note">Season points from the auto-run Challenger Series companion events, at the same per-tournament value as the real Championship Series (Signature-tier FedEx Cup points) — but this board and that one never affect each other. The Move column shows the shift caused by the last Challenger Series event${lastChallengerKey ? ` (triggered by ${byKey[lastChallengerKey].name})` : ''}.</p>`;
+      <p class="view-note">Season points from the auto-run Challenger Series companion events, at the same per-tournament value as the real Championship Series (Signature-tier FedEx Cup points) — but this board and that one never affect each other. The Move column shows the shift caused by the last Challenger Series event${lastChallengerKey ? ` (triggered by ${byKey[lastChallengerKey].name})` : ''}. Wins and Top 10 tally actual finishes across every Challenger Series event run so far.</p>`;
     if (!rows.length) { el.innerHTML += '<p class="view-note">No Challenger Series events have run yet.</p>'; return; }
-    standingsTable(el, rows);
+    standingsTable(el, rows, null, null, true);
   }
 
   // ---------------- reference view ----------------

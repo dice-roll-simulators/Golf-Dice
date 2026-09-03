@@ -164,6 +164,12 @@
 
   .cutoff-row td{ padding:6px 10px; font-family:'IBM Plex Mono',monospace; font-size:0.7rem; text-transform:uppercase; letter-spacing:0.05em; color:var(--accent-strong); text-align:center; border-top:1px dashed var(--accent); border-bottom:1px dashed var(--accent); background:var(--accent-soft); }
 
+  /* live scores + playoffs */
+  .live-score{ color:var(--accent-strong); font-weight:600; }
+  .playoff-box{ margin-top:16px; padding:16px 18px; border:1px solid var(--accent); border-radius:12px; background:var(--accent-soft); display:flex; flex-direction:column; gap:8px; }
+  .playoff-box h3{ font-size:1rem; font-weight:600; }
+  .playoff-box input[type="text"]{ text-align:center; }
+
   .disclaimer{ font-size:0.83rem; color:var(--ink-faint); background:var(--sand-soft); border:1px solid var(--line); border-radius:10px; padding:11px 15px; max-width:78ch; }
   .disclaimer b{ color:var(--ink-soft); font-weight:600; }
 
@@ -212,7 +218,7 @@
     return {
       scores: {}, roundLocked: {}, roundSelections: { r1: null, r2: null, r3: null, r4: null }, diceLog: { d1: [], d2: [], d3: [], d4: [] },
       challengerLog: [], challengerResults: [], challengerRefreshed: [], completionLog: [],
-      majorFields: {}, legacyStartingOwgr: {}, matchPlay: null,
+      majorFields: {}, legacyStartingOwgr: {}, matchPlay: null, playoffs: {},
     };
   }
   let STATE = defaultState();
@@ -614,6 +620,22 @@
     }
     return v;
   }
+  // Cosmetic-only counterpart to roundValue — reflects whatever holes are
+  // entered for a round SO FAR, not just a fully-finished one. Never used
+  // for the cut, points, standings, or movement arrows (all of which stay
+  // gated on a fully-entered, locked round); only the Leaderboard tab's
+  // live display uses this, so a birdie shows up the moment it's typed in
+  // rather than waiting for the whole round to be submitted.
+  function liveRoundValue(tKey, n, name) {
+    const sc = STATE.scores[tKey];
+    if (!sc || !sc['r' + n]) return null;
+    const v = sc['r' + n][name];
+    if (v === undefined || v === null) return null;
+    if (!Array.isArray(v)) return { sum: v, holesPlayed: 18, complete: true };
+    const filled = v.filter(h => h !== null && h !== undefined);
+    if (!filled.length) return null;
+    return { sum: filled.reduce((a, b) => a + b, 0), holesPlayed: filled.length, complete: filled.length === 18 };
+  }
 
   // A player "made the cut" if their round 1+2 total is within the
   // tournament's cut size (place + ties) — computed live off whoever
@@ -669,9 +691,10 @@
       return rounds.length ? { name: p.name, total: rounds.reduce((a, b) => a + b, 0) } : null;
     }).filter(Boolean);
     rowsForPts.sort((a, b) => a.total - b.total || compareBySurname(a.name, b.name));
-    const pts = pointsWithTies(rowsForPts, owgrTable);
+    const rankedForPts = applyPlayoffOrder(tKey, rowsForPts, r => r.name);
+    const pts = pointsWithTies(rankedForPts, owgrTable);
     const map = new Map();
-    rowsForPts.forEach((r, i) => map.set(r.name, pts[i]));
+    rankedForPts.forEach((r, i) => map.set(r.name, pts[i]));
     return map;
   }
 
@@ -715,6 +738,82 @@
   }
   function canLockTournament(tKey) { return [1, 2, 3, 4].every(n => isRoundDataComplete(tKey, n)); }
   function isTournamentLocked(tKey) { return [1, 2, 3, 4].every(n => isRoundLocked(tKey, n)); }
+
+  // ---------------- sudden-death playoffs ----------------
+  // Names tied for the lowest 72-hole total among players who made the cut,
+  // once every round is locked in — real golf only plays a playoff for the
+  // outright win, never for a tie further down the board.
+  function leadersTiedForFirst(tKey) {
+    if (!isTournamentLocked(tKey)) return [];
+    const t = byKey[tKey];
+    const cut = computeCut(tKey);
+    const totals = t.field.map(p => {
+      if (cut && cut.missedCut.has(p.name)) return null;
+      const rounds = [1, 2, 3, 4].map(n => roundValue(tKey, n, p.name));
+      if (rounds.some(v => v === null)) return null;
+      return { name: p.name, total: rounds.reduce((a, b) => a + b, 0) };
+    }).filter(Boolean);
+    if (!totals.length) return [];
+    const min = Math.min(...totals.map(r => r.total));
+    return totals.filter(r => r.total === min).map(r => r.name);
+  }
+  function canStartPlayoff(tKey) {
+    return !STATE.playoffs[tKey] && leadersTiedForFirst(tKey).length >= 2;
+  }
+  function startPlayoff(tKey) {
+    const tied = leadersTiedForFirst(tKey);
+    if (tied.length < 2) return false;
+    STATE.playoffs[tKey] = { tied: tied.slice(), holes: [], alive: tied.slice(), eliminatedTiers: [], resolved: false, order: [] };
+    saveState();
+    return true;
+  }
+  function resetPlayoff(tKey) {
+    delete STATE.playoffs[tKey];
+    saveState();
+  }
+  // Sudden death: everyone still alive plays a hole; whoever doesn't share
+  // the low score is eliminated (tied with anyone else eliminated the same
+  // hole) and locked into finishing behind everyone still alive. Repeats
+  // until exactly one player remains.
+  function submitPlayoffHole(tKey, scoresByName) {
+    const pf = STATE.playoffs[tKey];
+    if (!pf || pf.resolved) return false;
+    const alive = pf.alive;
+    const vals = alive.map(n => scoresByName[n]);
+    if (vals.some(v => v === undefined || v === null || Number.isNaN(v))) return false;
+    pf.holes.push({ scores: Object.assign({}, scoresByName) });
+    const min = Math.min(...vals);
+    const survivors = alive.filter(n => scoresByName[n] === min);
+    const eliminated = alive.filter(n => scoresByName[n] !== min);
+    if (eliminated.length) pf.eliminatedTiers.push(eliminated);
+    pf.alive = survivors;
+    if (survivors.length === 1) {
+      pf.resolved = true;
+      pf.order = survivors.concat(pf.eliminatedTiers.slice().reverse().flat());
+    }
+    saveState();
+    return true;
+  }
+  // Nudges the leading tied group's ranking key (never the real, displayed
+  // stroke total) into the playoff's resolved order, so both the Leaderboard
+  // position and the points awarded reflect the actual winner instead of a
+  // flat tie-share. `rows` must already be sorted ascending by `.total` and
+  // `nameOf` extracts a row's player name.
+  function applyPlayoffOrder(tKey, rows, nameOf) {
+    const pf = STATE.playoffs[tKey];
+    if (!pf || !pf.resolved || !pf.order.length || !rows.length) return rows;
+    const minTotal = rows[0].total;
+    let end = 0;
+    while (end < rows.length && rows[end].total === minTotal) end++;
+    if (end < 2) return rows;
+    const tiedGroup = rows.slice(0, end);
+    const groupNames = new Set(tiedGroup.map(nameOf));
+    if (pf.order.length !== tiedGroup.length || !pf.order.every(n => groupNames.has(n))) return rows;
+    const orderIndex = new Map(pf.order.map((n, i) => [n, i]));
+    tiedGroup.sort((a, b) => orderIndex.get(nameOf(a)) - orderIndex.get(nameOf(b)));
+    tiedGroup.forEach((r, i) => { r.total += i * 0.0001; }); // break the tie for sorting/points only
+    return tiedGroup.concat(rows.slice(end));
+  }
   // Finalizes every round at once (rather than requiring a visit to each of
   // the four Round tabs) — locking saves immediately, so the tournament's
   // data is complete and persisted the moment it's locked.
@@ -742,6 +841,7 @@
     if (crIdx !== -1) STATE.challengerRefreshed.splice(crIdx, 1);
     const compIdx = STATE.completionLog.indexOf(tKey);
     if (compIdx !== -1) STATE.completionLog.splice(compIdx, 1);
+    delete STATE.playoffs[tKey];
     saveState();
   }
 
@@ -850,11 +950,12 @@
         return rounds.length ? { p, total: rounds.reduce((a, b) => a + b, 0) } : null;
       }).filter(Boolean);
       rows.sort((a, b) => a.total - b.total || compareBySurname(a.p.name, b.p.name));
+      const rankedRows = applyPlayoffOrder(t.key, rows, r => r.p.name);
       const owgrTable = t.group === 'champ' ? DATA.pointTables.owgrRegular : DATA.pointTables.owgrMajor;
       const champTable = t.group === 'champ' ? DATA.pointTables.champSignature : DATA.pointTables.champMajor;
-      const owgrPts = pointsWithTies(rows, owgrTable);
-      const champPts = pointsWithTies(rows, champTable);
-      rows.forEach((r, i) => {
+      const owgrPts = pointsWithTies(rankedRows, owgrTable);
+      const champPts = pointsWithTies(rankedRows, champTable);
+      rankedRows.forEach((r, i) => {
         owgrTotal[r.p.name] = (owgrTotal[r.p.name] || 0) + owgrPts[i];
         champ[r.p.name] = (champ[r.p.name] || 0) + champPts[i];
       });
@@ -1386,14 +1487,37 @@
     // Each tournament has its own randomised draw order (t.startOrder, built
     // server-side) rather than every event listing the same roster order.
     const startOrderIndex = new Map((t.startOrder || t.field.map(p => p.name)).map((name, i) => [name, i]));
+    // Live scores: each round's value reflects whatever holes are entered so
+    // far, not just a finished round — a birdie moves the leaderboard the
+    // instant it's typed in. `complete[i]` marks whether that particular
+    // round is actually finished, purely for a "still live" cue on the cell.
     const rows = t.field.map(p => {
-      const rounds = [1, 2, 3, 4].map(n => roundValue(tKey, n, p.name));
-      const played = rounds.filter(v => v !== null);
-      const total = played.length ? played.reduce((a, b) => a + b, 0) : null;
+      const roundInfos = [1, 2, 3, 4].map(n => liveRoundValue(tKey, n, p.name));
+      const rounds = roundInfos.map(info => info ? info.sum : null);
+      const complete = roundInfos.map(info => !!(info && info.complete));
+      const played = roundInfos.filter(v => v !== null);
+      const total = played.length ? played.reduce((a, r) => a + r.sum, 0) : null;
+      const thru = complete.filter(Boolean).length;
+      let progress = null;
+      for (let i = 3; i >= 0; i--) {
+        if (roundInfos[i] && !roundInfos[i].complete) { progress = { round: i + 1, holes: roundInfos[i].holesPlayed }; break; }
+      }
       const missed = !!(cut && cut.missedCut.has(p.name));
       const fieldPos = (startOrderIndex.get(p.name) || 0) + 1;
-      return { p, rounds, thru: played.length, total, missed, fieldPos };
+      return { p, rounds, complete, total, thru, progress, missed, fieldPos, rankTotal: total };
     });
+
+    // If a playoff has resolved the tie for 1st, the Position column should
+    // show a clean 1/2 rather than T1/T1 — rankTotal carries that tiny,
+    // display-invisible nudge; `total` (shown to the player) never changes.
+    {
+      const contenders = rows.filter(r => !r.missed && r.total !== null)
+        .map(r => ({ total: r.total, name: r.p.name }))
+        .sort((a, b) => a.total - b.total);
+      const adjusted = applyPlayoffOrder(tKey, contenders, r => r.name);
+      const rankMap = new Map(adjusted.map(r => [r.name, r.total]));
+      rows.forEach(r => { if (rankMap.has(r.p.name)) r.rankTotal = rankMap.get(r.p.name); });
+    }
 
     // World Ranking points won in THIS tournament — the same live,
     // tie-shared calculation World Ranking itself uses per event, surfaced
@@ -1423,10 +1547,12 @@
     controlRow.className = 'lock-row';
     controlRow.style.marginBottom = '10px';
     el.appendChild(controlRow);
-    el.insertAdjacentHTML('beforeend', `<p class="view-note">Live from whatever's been entered in Round 1&ndash;4 for this tournament — refreshes automatically as scores come in. Click "Pos." to sort by score, or a round header (R1&ndash;R4) to sort by that round, with ties shown as "T". Players outside the cut line score 0 toward the Championship Series and World Ranking. The Move column shows how a player's position changed once the most recently locked round was submitted, versus the round before it. WR pts is how many World Ranking points that finish is worth right now, tie-shared the same way the World Ranking tab totals them.</p>`);
+    el.insertAdjacentHTML('beforeend', `<p class="view-note">Live down to the hole — a score updates the instant it's typed into Round 1&ndash;4, even mid-round. Click "Pos." to sort by score, or a round header (R1&ndash;R4) to sort by that round, with ties shown as "T". Players outside the cut line score 0 toward the Championship Series and World Ranking. The Move column shows how a player's position changed once the most recently locked round was submitted, versus the round before it. WR pts is how many World Ranking points that finish is worth right now, tie-shared the same way the World Ranking tab totals them.</p>`);
     el.insertAdjacentHTML('beforeend', fieldMakeupNote(t));
     const tableHost = document.createElement('div');
     el.appendChild(tableHost);
+    const playoffHost = document.createElement('div');
+    el.appendChild(playoffHost);
 
     function drawControls() {
       controlRow.innerHTML = '';
@@ -1457,19 +1583,117 @@
       controlRow.appendChild(clearBtn);
     }
 
+    function drawPlayoff() {
+      playoffHost.innerHTML = '';
+      if (!isTournamentLocked(tKey)) return; // a playoff only makes sense once the result is otherwise final
+      const pf = STATE.playoffs[tKey];
+      const box = document.createElement('div');
+      box.className = 'playoff-box';
+      if (!pf) {
+        if (!canStartPlayoff(tKey)) return;
+        const tied = leadersTiedForFirst(tKey);
+        box.innerHTML = `<h3>&#9878; It's a tie for the lead</h3><p class="view-note">${tied.join(', ')} are tied at the top after 72 holes. Settle it with a sudden-death playoff, one hole at a time.</p>`;
+        const startBtn = document.createElement('button');
+        startBtn.className = 'btn primary';
+        startBtn.textContent = 'Start playoff';
+        startBtn.addEventListener('click', () => { startPlayoff(tKey); renderLeaderboard(tKey); });
+        box.appendChild(startBtn);
+        playoffHost.appendChild(box);
+        return;
+      }
+      box.innerHTML = `<h3>&#9878; Playoff — sudden death</h3>`;
+      if (pf.holes.length) {
+        const wrap = document.createElement('div');
+        wrap.className = 'table-wrap';
+        const table = document.createElement('table');
+        table.innerHTML = `<thead><tr><th>Hole</th>${pf.tied.map(n => `<th>${n}</th>`).join('')}</tr></thead>`;
+        const tbody = document.createElement('tbody');
+        pf.holes.forEach((h, i) => {
+          const vals = pf.tied.map(n => h.scores[n]).filter(v => v !== undefined);
+          const min = vals.length ? Math.min(...vals) : null;
+          const tr = document.createElement('tr');
+          const cells = pf.tied.map(n => {
+            const v = h.scores[n];
+            if (v === undefined) return '<td class="num mono">–</td>';
+            return `<td class="num mono${v === min ? ' good' : ''}">${fmtToPar(v)}</td>`;
+          }).join('');
+          tr.innerHTML = `<td class="rk mono">PO${i + 1}</td>${cells}`;
+          tbody.appendChild(tr);
+        });
+        table.appendChild(tbody);
+        wrap.appendChild(table);
+        box.appendChild(wrap);
+      }
+      if (pf.resolved) {
+        const runnersUp = pf.order.slice(1);
+        box.insertAdjacentHTML('beforeend', `<div class="champion-banner">&#127942; <strong>${pf.order[0]}</strong> wins the playoff${runnersUp.length ? ' over ' + runnersUp.join(', ') : ''}</div>`);
+      } else {
+        const formWrap = document.createElement('div');
+        formWrap.className = 'chips';
+        formWrap.style.marginTop = '10px';
+        const inputs = {};
+        pf.alive.forEach(name => {
+          const label = document.createElement('label');
+          label.style.cssText = 'display:flex;flex-direction:column;gap:4px;font-size:0.8rem;color:var(--ink-soft);';
+          const input = document.createElement('input');
+          input.type = 'text'; input.inputMode = 'numeric'; input.placeholder = 'E';
+          input.style.width = '80px';
+          label.appendChild(document.createTextNode(name));
+          label.appendChild(input);
+          inputs[name] = input;
+          formWrap.appendChild(label);
+        });
+        box.appendChild(formWrap);
+        const status = document.createElement('span');
+        status.className = 'view-note';
+        status.style.cssText = 'margin:8px 0 0;display:block;';
+        box.appendChild(status);
+        const submitBtn = document.createElement('button');
+        submitBtn.className = 'btn primary';
+        submitBtn.style.marginTop = '8px';
+        submitBtn.textContent = `Resolve playoff hole ${pf.holes.length + 1}`;
+        submitBtn.addEventListener('click', () => {
+          const scores = {};
+          for (const name of pf.alive) {
+            const v = parseHoleValue(inputs[name].value);
+            if (v === null || v === undefined) { status.textContent = 'Enter a score for every player still in the playoff (E for even, or +/-N).'; return; }
+            scores[name] = v;
+          }
+          submitPlayoffHole(tKey, scores);
+          renderLeaderboard(tKey);
+        });
+        box.appendChild(submitBtn);
+      }
+      const resetBtn = document.createElement('button');
+      resetBtn.className = 'btn danger';
+      resetBtn.style.cssText = 'margin-top:10px;margin-left:8px;';
+      resetBtn.textContent = 'Reset playoff';
+      resetBtn.addEventListener('click', () => {
+        if (!confirm('Reset this playoff and start over from hole 1?')) return;
+        resetPlayoff(tKey);
+        renderLeaderboard(tKey);
+      });
+      box.appendChild(resetBtn);
+      playoffHost.appendChild(box);
+    }
+
     function draw() {
       drawControls();
+      drawPlayoff();
       const sorted = rows.slice();
       const roundMatch = /^r([1-4])$/.exec(sortMode);
       if (sortMode === 'score') {
+        // Sorts and labels by rankTotal, not total — identical to the
+        // player's real stroke total unless a resolved playoff has broken a
+        // tie for 1st, in which case rankTotal reflects who actually won.
         sorted.sort((a, b) => {
           if (a.missed !== b.missed) return a.missed ? 1 : -1; // cut players sink below the line
-          if (a.total === null && b.total === null) return compareBySurname(a.p.name, b.p.name);
-          if (a.total === null) return 1;
-          if (b.total === null) return -1;
-          return a.total - b.total;
+          if (a.rankTotal === null && b.rankTotal === null) return compareBySurname(a.p.name, b.p.name);
+          if (a.rankTotal === null) return 1;
+          if (b.rankTotal === null) return -1;
+          return a.rankTotal - b.rankTotal;
         });
-        assignPositions(sorted.filter(r => !r.missed && r.total !== null));
+        assignPositionsField(sorted.filter(r => !r.missed && r.rankTotal !== null), r => r.rankTotal);
       } else if (roundMatch) {
         const idx = parseInt(roundMatch[1], 10) - 1;
         sorted.sort((a, b) => {
@@ -1507,20 +1731,28 @@
       tableHost.appendChild(wrap);
       const useLabel = sortMode === 'score' || !!roundMatch;
       sorted.forEach((r, idx) => {
-        const cell = (v) => v === null ? '<span class="dash">–</span>' : fmtToPar(v);
+        // A round still in progress renders its live partial score in an
+        // accent color instead of plain text — the "drama" cue that
+        // something's actively moving on the board right now.
+        const cell = (v, complete) => {
+          if (v === null) return '<span class="dash">–</span>';
+          return complete === false ? `<span class="live-score">${fmtToPar(v)}</span>` : fmtToPar(v);
+        };
         const tr = document.createElement('tr');
         const wrCell = r.wrPts === null ? '<span class="dash">–</span>' : r.wrPts.toFixed(4);
+        const thruCell = `${r.thru}/4${r.progress ? ` <span class="live-score">&middot; thru ${r.progress.holes}</span>` : ''}`;
+        const totalHtml = r.total === null ? '<span class="dash">–</span>' : (r.progress ? `<span class="live-score">${fmtToPar(r.total)}</span>` : fmtToPar(r.total));
         if (r.missed) {
           tr.style.opacity = '0.55';
           tr.innerHTML = `<td class="rk mono">MC</td><td class="num mono">${movementHtml(null)}</td><td class="name">${r.p.name}</td><td class="ctry">${r.p.country}</td>
-            <td class="num mono">${cell(r.rounds[0])}</td><td class="num mono">${cell(r.rounds[1])}</td><td class="num mono">–</td><td class="num mono">–</td>
+            <td class="num mono">${cell(r.rounds[0], r.complete[0])}</td><td class="num mono">${cell(r.rounds[1], r.complete[1])}</td><td class="num mono">–</td><td class="num mono">–</td>
             <td class="num mono">2/4</td><td class="num mono">${r.total === null ? '<span class="dash">–</span>' : fmtToPar(r.total)}</td><td class="num mono">${wrCell}</td>`;
         } else {
           const posCell = useLabel ? (r.posLabel || '<span class="dash">–</span>') : idx + 1;
           const totalCls = r.total === null ? '' : r.total < 0 ? 'good' : r.total > 0 ? 'bad' : '';
           tr.innerHTML = `<td class="rk mono">${posCell}</td><td class="num mono">${movementHtml(r.movement)}</td><td class="name">${r.p.name}</td><td class="ctry">${r.p.country}</td>
-            <td class="num mono">${cell(r.rounds[0])}</td><td class="num mono">${cell(r.rounds[1])}</td><td class="num mono">${cell(r.rounds[2])}</td><td class="num mono">${cell(r.rounds[3])}</td>
-            <td class="num mono">${r.thru}/4</td><td class="num mono score-total ${totalCls}">${r.total === null ? '<span class="dash">–</span>' : fmtToPar(r.total)}</td><td class="num mono">${wrCell}</td>`;
+            <td class="num mono">${cell(r.rounds[0], r.complete[0])}</td><td class="num mono">${cell(r.rounds[1], r.complete[1])}</td><td class="num mono">${cell(r.rounds[2], r.complete[2])}</td><td class="num mono">${cell(r.rounds[3], r.complete[3])}</td>
+            <td class="num mono">${thruCell}</td><td class="num mono score-total ${totalCls}">${totalHtml}</td><td class="num mono">${wrCell}</td>`;
         }
         tbody.appendChild(tr);
       });

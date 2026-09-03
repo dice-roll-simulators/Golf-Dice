@@ -217,7 +217,7 @@
   function defaultState() {
     return {
       scores: {}, roundLocked: {}, roundSelections: { r1: null, r2: null, r3: null, r4: null }, diceLog: { d1: [], d2: [], d3: [], d4: [] },
-      challengerLog: [], challengerResults: [], challengerRefreshed: [], completionLog: [],
+      challengerLog: [], challengerResults: [], challengerRefreshed: [], challengerRefreshCounts: {}, completionLog: [],
       majorFields: {}, legacyStartingOwgr: {}, matchPlay: null, playoffs: {},
     };
   }
@@ -229,6 +229,12 @@
   function saveState() {
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(STATE)); } catch (e) {}
   }
+  // Migrate from the old one-refresh-only tracking (a plain array of
+  // already-refreshed keys) into the new per-event count, so an event that
+  // had already used its one refresh starts at 1 of 2 rather than resetting.
+  STATE.challengerRefreshed.forEach(key => {
+    if (!(key in STATE.challengerRefreshCounts)) STATE.challengerRefreshCounts[key] = 1;
+  });
 
   const byKey = Object.fromEntries(DATA.tournaments.map(t => [t.key, t]));
 
@@ -839,6 +845,7 @@
     STATE.challengerResults = STATE.challengerResults.filter(ev => ev.triggerKey !== tKey);
     const crIdx = STATE.challengerRefreshed.indexOf(tKey);
     if (crIdx !== -1) STATE.challengerRefreshed.splice(crIdx, 1);
+    delete STATE.challengerRefreshCounts[tKey];
     const compIdx = STATE.completionLog.indexOf(tKey);
     if (compIdx !== -1) STATE.completionLog.splice(compIdx, 1);
     delete STATE.playoffs[tKey];
@@ -863,16 +870,99 @@
     return changed;
   }
 
+  // The champ-group events that actually trigger a normal, randomly-drawn
+  // Challenger companion — everything except the Finale (which gets its own
+  // top-90-only companion below) and the match-play Group Stage/Knockout
+  // (which never trigger one at all, since they never carry stroke-play
+  // scores). A function (not a top-level const) since this is needed the
+  // moment the app starts up — before a top-level const declared further
+  // down the script would yet be initialized.
+  function regularChallengerTriggerKeys() {
+    return DATA.tournaments
+      .filter(t => t.group === 'champ' && t.key !== 'finale' && !MATCH_PLAY_KEYS.has(t.key))
+      .map(t => t.key);
+  }
+  // 0 at the first regular Challenger event of the season, 1 by the last one
+  // before the Finale — how strongly the field should already be favoring
+  // the current Challenger Series leaders rather than the fixed depth-pool
+  // ranking.
+  function challengerSkewProgress() {
+    const keys = regularChallengerTriggerKeys();
+    const done = STATE.challengerLog.filter(k => keys.includes(k)).length;
+    const denom = Math.max(keys.length - 1, 1);
+    return Math.min(done / denom, 1);
+  }
+  // Everyone who has won (finished rank 1 in) a Challenger Series event
+  // already this season — guaranteed a spot in every one that follows.
+  function pastChallengerWinners() {
+    const names = new Set();
+    STATE.challengerResults.forEach(ev => {
+      const winner = ev.result.find(r => r.rank === 1);
+      if (winner) names.add(winner.name);
+    });
+    return names;
+  }
+  // The depth pool re-ordered by a blend of its fixed rank and the CURRENT
+  // Challenger Series standings — `t` 0 is pure depth-pool rank (this
+  // season's very first Challenger event), `t` 1 is pure current-standings
+  // order (the last one before the Finale). Feeding this into weightedSample
+  // instead of the raw pool is what makes the draw skew toward this
+  // season's Challenger leaders as more events play out.
+  function challengerBlendedOrder(t) {
+    if (t <= 0) return DATA.backgroundPool;
+    const { challenger } = computeStandings();
+    const byChallengerPts = DATA.backgroundPool.slice().sort((a, b) => (challenger[b.name] || 0) - (challenger[a.name] || 0));
+    const standingsRank = new Map(byChallengerPts.map((p, i) => [p.name, i + 1]));
+    const depthRank = new Map(DATA.backgroundPool.map((p, i) => [p.name, i + 1]));
+    return DATA.backgroundPool.slice().sort((a, b) => {
+      const ea = (1 - t) * depthRank.get(a.name) + t * standingsRank.get(a.name);
+      const eb = (1 - t) * depthRank.get(b.name) + t * standingsRank.get(b.name);
+      return ea - eb;
+    });
+  }
   // Randomised companion event drawn from the open depth pool, weighted
-  // toward the top of the pool the same way the Depth Pool tab's resample
-  // does. Challenger Series points use the full Championship Series
-  // (Signature-tier) table; World Ranking points use the regular-event OWGR
-  // table at HALF value — per tournament, worth the same as a Championship
-  // Series event on the Challenger board, but only half the World Ranking
-  // weight, and with zero effect on the real Championship Series standings.
+  // toward the top of the (increasingly Challenger-standings-blended) pool.
+  // Any previous winner this season is guaranteed a spot rather than just
+  // weighted toward one. Challenger Series points use the full Championship
+  // Series (Signature-tier) table; World Ranking points use the
+  // regular-event OWGR table at HALF value — per tournament, worth the same
+  // as a Championship Series event on the Challenger board, but only half
+  // the World Ranking weight, and with zero effect on the real Championship
+  // Series standings.
   function runChallengerEvent(trigger) {
+    if (trigger.key === 'finale') return runChallengerFinale(trigger);
     const size = 120 + Math.floor(Math.random() * 21); // 120-140
-    const field = weightedSample(DATA.backgroundPool, size, Math.random);
+    const blendedOrder = challengerBlendedOrder(challengerSkewProgress());
+    const guaranteed = pastChallengerWinners();
+    const guaranteedPlayers = blendedOrder.filter(p => guaranteed.has(p.name));
+    const restPool = blendedOrder.filter(p => !guaranteed.has(p.name));
+    const remainingSlots = Math.max(size - guaranteedPlayers.length, 0);
+    const sampled = weightedSample(restPool, remainingSlots, Math.random);
+    // Re-sort the combined field back into blended order (rather than
+    // guaranteed-players-first) so the finish-order draw below still weighs
+    // everyone by their real standing, not by how they happened to be
+    // concatenated.
+    const fieldNames = new Set([...guaranteedPlayers, ...sampled].map(p => p.name));
+    const field = blendedOrder.filter(p => fieldNames.has(p.name));
+    const order = weightedSample(field, field.length, Math.random);
+    const owgrTable = DATA.pointTables.owgrRegular;
+    const champTable = DATA.pointTables.champSignature;
+    const result = order.map((p, i) => {
+      const rank = i + 1;
+      return { name: p.name, country: p.country, rank, owgrPts: pointsForRank(owgrTable, rank) * 0.5, challengerPts: pointsForRank(champTable, rank) };
+    });
+    return { triggerKey: trigger.key, triggerName: trigger.name, dates: trigger.dates, fieldSize: field.length, result };
+  }
+  // The Challenger Series' own finale, triggered alongside the Championship
+  // Series Finale: field is exactly the top 90 on the CURRENT Challenger
+  // Series standings — no random draw for membership, no guaranteed-winner
+  // top-up (they're almost certainly in the top 90 already) — only the
+  // finish order is a weighted random draw.
+  function runChallengerFinale(trigger) {
+    const { challenger } = computeStandings();
+    const field = DATA.backgroundPool.slice()
+      .sort((a, b) => (challenger[b.name] || 0) - (challenger[a.name] || 0) || a.rank - b.rank)
+      .slice(0, 90);
     const order = weightedSample(field, field.length, Math.random);
     const owgrTable = DATA.pointTables.owgrRegular;
     const champTable = DATA.pointTables.champSignature;
@@ -883,6 +973,8 @@
     return { triggerKey: trigger.key, triggerName: trigger.name, dates: trigger.dates, fieldSize: field.length, result };
   }
 
+  // Majors and THE PLAYERS are group 'major'/'players', never 'champ' — this
+  // filter is what keeps them from ever triggering a Challenger companion.
   function checkChallengerTriggers() {
     let changed = false;
     DATA.tournaments.filter(t => t.group === 'champ').forEach(t => {
@@ -897,17 +989,21 @@
   }
 
   // Re-rolls one already-run Challenger Series event against the current
-  // depth pool — allowed exactly once per event (e.g. after the pool itself
-  // gets refreshed/rebalanced), tracked in STATE.challengerRefreshed.
+  // depth pool and standings — allowed up to twice per event, tracked in
+  // STATE.challengerRefreshCounts.
+  const CHALLENGER_REFRESH_LIMIT = 2;
+  function challengerRefreshesUsed(triggerKey) {
+    return STATE.challengerRefreshCounts[triggerKey] || 0;
+  }
   function canRefreshChallengerEvent(triggerKey) {
-    return !STATE.challengerRefreshed.includes(triggerKey);
+    return challengerRefreshesUsed(triggerKey) < CHALLENGER_REFRESH_LIMIT;
   }
   function refreshChallengerEvent(triggerKey) {
     if (!canRefreshChallengerEvent(triggerKey)) return false;
     const idx = STATE.challengerResults.findIndex(ev => ev.triggerKey === triggerKey);
     if (idx === -1) return false;
     STATE.challengerResults[idx] = runChallengerEvent(byKey[triggerKey]);
-    STATE.challengerRefreshed.push(triggerKey);
+    STATE.challengerRefreshCounts[triggerKey] = challengerRefreshesUsed(triggerKey) + 1;
     saveState();
     return true;
   }
@@ -1997,7 +2093,7 @@
     const el = viewContainer('challengertournament');
     const results = STATE.challengerResults;
     el.innerHTML = `<div class="view-head"><h2>Challenger Series Tournament</h2><div class="meta">${results.length} event${results.length === 1 ? '' : 's'} run</div></div>
-      <p class="view-note">Every time a Championship Series event finishes (round 1 cut through round 4), a companion Challenger Series event auto-runs here — a randomised, weighted result drawn from the real 121+ depth pool, ranks 121&ndash;${120 + DATA.backgroundPool.length}. Field size varies 120&ndash;140 each time. It has no effect on the Championship Series board; it feeds the Challenger Series Standings tab at full value and the World Ranking at half value. Each event can be re-rolled against the current depth pool exactly once, with "Refresh (once)" below it.</p>`;
+      <p class="view-note">Every time a Championship Series event finishes (round 1 cut through round 4), a companion Challenger Series event auto-runs here — a randomised, weighted result drawn from the real 121+ depth pool, ranks 121&ndash;${120 + DATA.backgroundPool.length}. Field size varies 120&ndash;140 each time, skewing more toward the current Challenger Series leaders as the season goes on, and anyone who's already won a Challenger Series event this season is guaranteed a spot in every one after. It has no effect on the Championship Series board; it feeds the Challenger Series Standings tab at full value and the World Ranking at half value. Each event can be re-rolled up to twice with "Refresh" below it. The Championship Series Finale triggers its own Challenger Series Finale — field is exactly the top 90 on the Challenger Series standings at that point, no random draw for who's in it.</p>`;
     if (!results.length) {
       el.innerHTML += '<p class="view-note">Nothing yet — complete a Championship Series event (all rounds, cut included) in Round 1&ndash;4 to trigger the first one.</p>';
       return;
@@ -2006,13 +2102,15 @@
       const box = document.createElement('div');
       box.style.marginBottom = '28px';
       const canRefresh = canRefreshChallengerEvent(ev.triggerKey);
+      const refreshesUsed = challengerRefreshesUsed(ev.triggerKey);
+      const isFinale = ev.triggerKey === 'finale';
       const chips = document.createElement('div');
       chips.className = 'chips';
       chips.style.marginBottom = '10px';
-      chips.innerHTML = `<span class="chip">Triggered by ${ev.triggerName}</span><span class="chip">${ev.dates}</span><span class="chip">${ev.fieldSize} players</span>`;
+      chips.innerHTML = `<span class="chip">Triggered by ${ev.triggerName}</span><span class="chip">${ev.dates}</span><span class="chip">${ev.fieldSize} players</span>${isFinale ? '<span class="chip" style="border-color:var(--accent);color:var(--accent-strong);">Challenger Series Finale — top 90 only</span>' : ''}`;
       const refreshBtn = document.createElement('button');
       refreshBtn.className = 'btn';
-      refreshBtn.textContent = canRefresh ? 'Refresh (once)' : 'Already refreshed';
+      refreshBtn.textContent = canRefresh ? `Refresh (${refreshesUsed}/${CHALLENGER_REFRESH_LIMIT} used)` : `Refresh limit reached (${CHALLENGER_REFRESH_LIMIT}/${CHALLENGER_REFRESH_LIMIT})`;
       refreshBtn.disabled = !canRefresh;
       if (!canRefresh) refreshBtn.style.opacity = '0.5';
       refreshBtn.addEventListener('click', () => {

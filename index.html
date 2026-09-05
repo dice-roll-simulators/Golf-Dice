@@ -1063,7 +1063,12 @@
   // field construction ask "what did the standings look like right after
   // event X" rather than "what do they look like right now" (which could
   // already include later tournaments the player happened to enter first).
-  function computeStandings(excludeKey, upToKey) {
+  // `completedOnly`, when true, skips any tournament that isn't fully
+  // locked in — used by the Championship Series tab's default view so an
+  // event in progress doesn't move the board until it's actually decided.
+  // Challenger Series events never need this: they're generated atomically
+  // (never partially entered), so there's no "in progress" state for them.
+  function computeStandings(excludeKey, upToKey, completedOnly) {
     const upToIdx = upToKey ? DATA.tournaments.findIndex(t => t.key === upToKey) : -1;
     const withinScope = (key) => {
       if (!upToKey) return true;
@@ -1078,6 +1083,7 @@
       if (!withinScope(t.key)) return;
       const sc = STATE.scores[t.key];
       if (!sc) return;
+      if (completedOnly && !isTournamentComplete(t.key)) return;
       const cut = computeCut(t.key);
       const rows = t.field.map(p => {
         if (cut && cut.missedCut.has(p.name)) return null; // 0 points, same as real golf
@@ -2209,20 +2215,42 @@
   function lastCompletedTournamentKey() {
     return STATE.completionLog.length ? STATE.completionLog[STATE.completionLog.length - 1] : null;
   }
+  // Default view counts only tournaments that are fully complete AND
+  // locked — an event still in progress doesn't move this board at all
+  // until it's actually decided. "Include in-progress" switches to a live
+  // projection instead, folding in whatever's entered so far for any
+  // tournament still being played.
   function renderChampPoints() {
     const el = viewContainer('champpoints');
-    const { champ } = computeStandings();
-    const { wins, top10 } = computeCareerStats();
-    const rows = Object.entries(champ)
-      .filter(([, pts]) => pts > 0)
-      .map(([name, pts]) => ({ name, country: NAME_INDEX.get(name), points: pts, wins: wins[name] || 0, top10: top10[name] || 0 }))
-      .sort((a, b) => b.points - a.points);
-    const lastKey = lastCompletedTournamentKey();
-    attachMovement(rows, lastKey ? computeStandings(lastKey).champ : null, ([, pts]) => pts > 0);
-    el.innerHTML = `<div class="view-head"><h2>Championship Series Points</h2><div class="meta">${rows.length} players on the board</div></div>
-      <p class="view-note">Season points from every Championship Series event, THE PLAYERS, and all four majors — recalculated live from whatever's entered in Round 1&ndash;4. Point values follow the <a href="https://en.wikipedia.org/wiki/List_of_point_distributions_of_the_FedEx_Cup" style="color:inherit;">FedEx Cup distribution</a> by tier (Signature-tier for the ${DATA.tournaments.filter(t => t.group === 'champ' && !MATCH_PLAY_KEYS.has(t.key)).length} Championship Series events, Major-tier for majors and THE PLAYERS). Entirely separate from the Challenger Series board — Challenger results never move this one. The Move column shows the shift caused by the last tournament submitted${lastKey ? ` (${byKey[lastKey].name})` : ''}. Wins and Top 10 count actual finishes from completed, locked tournaments only (a resolved playoff credits one win, not a tie). The top 90 here qualify for the Championship Series Finale; the Group Stage and Knockout that follow it are match play and don't add any more points. Click a player's name for their full results so far.</p>`;
-    if (!rows.length) { el.innerHTML += '<p class="view-note">No results yet — enter scores in Round 1&ndash;4 to populate this board.</p>'; return; }
-    standingsTable(el, rows, 90, 'Championship Series Finale cutoff — top 90 advance', true);
+    let showProjected = false;
+
+    function draw() {
+      const completedOnly = !showProjected;
+      const { champ } = computeStandings(undefined, undefined, completedOnly);
+      const { wins, top10 } = computeCareerStats();
+      const rows = Object.entries(champ)
+        .filter(([, pts]) => pts > 0)
+        .map(([name, pts]) => ({ name, country: NAME_INDEX.get(name), points: pts, wins: wins[name] || 0, top10: top10[name] || 0 }))
+        .sort((a, b) => b.points - a.points);
+      const lastKey = lastCompletedTournamentKey();
+      const prevChamp = lastKey ? computeStandings(lastKey, undefined, completedOnly).champ : null;
+      attachMovement(rows, prevChamp, ([, pts]) => pts > 0);
+      const modeNote = completedOnly
+        ? 'Showing only points from tournaments that are complete and locked — an event still in progress doesn\'t move this board yet.'
+        : 'Showing a live projection, including whatever\'s entered so far in any tournament still in progress — this will keep changing until that event is actually locked in.';
+      el.innerHTML = `<div class="view-head"><h2>Championship Series Points</h2><div class="meta">${rows.length} players on the board</div></div>
+        <div class="picker-row" style="margin-bottom:10px;" id="champ-points-filter">
+          <button class="btn${completedOnly ? ' primary' : ''}" data-mode="completed">Completed only</button>
+          <button class="btn${!completedOnly ? ' primary' : ''}" data-mode="projected">Include in-progress (projected)</button>
+        </div>
+        <p class="view-note">${modeNote} Season points from every Championship Series event, THE PLAYERS, and all four majors. Point values follow the <a href="https://en.wikipedia.org/wiki/List_of_point_distributions_of_the_FedEx_Cup" style="color:inherit;">FedEx Cup distribution</a> by tier (Signature-tier for the ${DATA.tournaments.filter(t => t.group === 'champ' && !MATCH_PLAY_KEYS.has(t.key)).length} Championship Series events, Major-tier for majors and THE PLAYERS). Entirely separate from the Challenger Series board — Challenger results never move this one. The Move column shows the shift caused by the last tournament submitted${lastKey ? ` (${byKey[lastKey].name})` : ''}. Wins and Top 10 count actual finishes from completed, locked tournaments only regardless of this filter (a resolved playoff credits one win, not a tie). The top 90 here qualify for the Championship Series Finale; the Group Stage and Knockout that follow it are match play and don't add any more points. Click a player's name for their full results so far.</p>`;
+      el.querySelectorAll('#champ-points-filter button').forEach(btn => {
+        btn.addEventListener('click', () => { showProjected = btn.dataset.mode === 'projected'; draw(); });
+      });
+      if (!rows.length) { el.insertAdjacentHTML('beforeend', `<p class="view-note">${completedOnly ? 'No completed, locked results yet — finish and lock a tournament to populate this board, or switch to "Include in-progress" for a live projection.' : 'No results yet — enter scores in Round 1&ndash;4 to populate this board.'}</p>`); return; }
+      standingsTable(el, rows, 90, 'Championship Series Finale cutoff — top 90 advance', true);
+    }
+    draw();
   }
   function renderWorldRanking() {
     const el = viewContainer('worldranking');

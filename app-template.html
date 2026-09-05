@@ -164,6 +164,18 @@
 
   .cutoff-row td{ padding:6px 10px; font-family:'IBM Plex Mono',monospace; font-size:0.7rem; text-transform:uppercase; letter-spacing:0.05em; color:var(--accent-strong); text-align:center; border-top:1px dashed var(--accent); border-bottom:1px dashed var(--accent); background:var(--accent-soft); }
 
+  /* clickable player name -> results modal */
+  td.name.clickable{ cursor:pointer; color:var(--accent-strong); text-decoration:underline; text-decoration-color:transparent; transition:text-decoration-color 0.1s; }
+  td.name.clickable:hover{ text-decoration-color:var(--accent-strong); }
+  .modal-overlay{ position:fixed; inset:0; background:rgba(20,24,22,0.55); display:flex; align-items:center; justify-content:center; z-index:1000; padding:24px; }
+  .modal-box{ background:var(--bg); border:1px solid var(--line); border-radius:14px; max-width:720px; width:100%; max-height:85vh; overflow-y:auto; padding:24px 26px; box-shadow:0 12px 40px rgba(0,0,0,0.25); }
+  .modal-head{ display:flex; justify-content:space-between; align-items:flex-start; gap:16px; margin-bottom:6px; }
+  .modal-head h2{ font-size:1.3rem; font-weight:600; }
+  .modal-close{ background:none; border:1px solid var(--line); border-radius:8px; width:32px; height:32px; font-size:1rem; line-height:1; cursor:pointer; color:var(--ink-soft); flex-shrink:0; }
+  .modal-close:hover{ background:var(--accent-soft); color:var(--ink); }
+  .modal-box h3{ font-size:0.95rem; font-weight:600; margin:18px 0 8px; }
+  .modal-box h3:first-of-type{ margin-top:14px; }
+
   /* live scores + playoffs */
   .live-score{ color:var(--accent-strong); font-weight:600; }
   .playoff-box{ margin-top:16px; padding:16px 18px; border:1px solid var(--accent); border-radius:12px; background:var(--accent-soft); display:flex; flex-direction:column; gap:8px; }
@@ -193,6 +205,7 @@
     <div id="views"></div>
   </main>
 </div>
+<div id="player-modal-root"></div>
 
 <script>
   const DATA = __APP_DATA__;
@@ -2017,8 +2030,9 @@
       const tr = document.createElement('tr');
       tr.dataset.name = r.name.toLowerCase();
       const extraCells = showCareerStats ? `<td class="num mono">${r.wins || 0}</td><td class="num mono">${r.top10 || 0}</td>` : '';
-      tr.innerHTML = `<td class="rk mono">${i + 1}</td><td class="num mono">${movementHtml(r.movement)}</td><td class="name">${r.name}</td><td class="ctry">${r.country || ''}</td><td class="num mono">${r.points.toFixed(2)}</td>${extraCells}`;
+      tr.innerHTML = `<td class="rk mono">${i + 1}</td><td class="num mono">${movementHtml(r.movement)}</td><td class="name clickable">${r.name}</td><td class="ctry">${r.country || ''}</td><td class="num mono">${r.points.toFixed(2)}</td>${extraCells}`;
       tbody.appendChild(tr);
+      tr.querySelector('.name').addEventListener('click', () => showPlayerModal(r.name));
       if (cutoffAfter && i + 1 === cutoffAfter && i + 1 < rows.length) {
         const divider = document.createElement('tr');
         divider.className = 'cutoff-row';
@@ -2079,6 +2093,115 @@
     });
     return { wins, top10 };
   }
+
+  // ---------------- player results modal ----------------
+  // Full per-tournament standings, live off however much is entered so
+  // far, sorted ascending by total and playoff-order-adjusted (so a
+  // resolved tie shows a clean 1/2, not a shared T1) — the single source
+  // of truth behind a player's results history below. `rawTotal` keeps
+  // the real, undoctored score-to-par for display, since `total` itself
+  // gets a tiny invisible nudge for the tied group when a playoff resolved it.
+  function tournamentStandingsRows(tKey) {
+    const t = byKey[tKey];
+    const sc = STATE.scores[tKey];
+    if (!t || !sc) return null;
+    const cut = computeCut(tKey);
+    const rows = t.field.map(p => {
+      if (cut && cut.missedCut.has(p.name)) return null;
+      const rounds = [1, 2, 3, 4].map(n => roundValue(tKey, n, p.name)).filter(v => v !== null);
+      if (!rounds.length) return null;
+      const total = rounds.reduce((a, b) => a + b, 0);
+      return { p, total, rawTotal: total };
+    }).filter(Boolean);
+    rows.sort((a, b) => a.total - b.total || compareBySurname(a.p.name, b.p.name));
+    const ranked = applyPlayoffOrder(tKey, rows, r => r.p.name);
+    assignPositions(ranked);
+    const owgrTable = t.group === 'champ' ? DATA.pointTables.owgrRegular : DATA.pointTables.owgrMajor;
+    const champTable = t.group === 'champ' ? DATA.pointTables.champSignature : DATA.pointTables.champMajor;
+    const owgrPts = pointsWithTies(ranked, owgrTable);
+    const champPts = pointsWithTies(ranked, champTable);
+    ranked.forEach((r, i) => { r.wrPts = owgrPts[i]; r.champPts = champPts[i]; });
+    return { cut, ranked };
+  }
+  // Everything one player has actually played so far this season: their
+  // finish (or MC), score to par, and points in every stroke-play
+  // tournament they're in the field for (majors/THE PLAYERS/Championship
+  // Series — match play has no stroke-play finish so it's excluded), plus
+  // every Challenger Series event they've featured in.
+  function playerResultsHistory(name) {
+    const tournamentRows = [];
+    DATA.tournaments.forEach(t => {
+      if (MATCH_PLAY_KEYS.has(t.key)) return;
+      if (!t.field.some(p => p.name === name)) return;
+      const std = tournamentStandingsRows(t.key);
+      if (!std) return;
+      if (std.cut && std.cut.missedCut.has(name)) {
+        tournamentRows.push({ key: t.key, name: t.name, dates: t.dates, missed: true, posLabel: 'MC', total: null, champPts: 0, wrPts: 0, locked: isTournamentLocked(t.key) });
+        return;
+      }
+      const row = std.ranked.find(r => r.p.name === name);
+      if (!row) return;
+      tournamentRows.push({ key: t.key, name: t.name, dates: t.dates, missed: false, posLabel: row.posLabel, total: row.rawTotal, champPts: row.champPts, wrPts: row.wrPts, locked: isTournamentLocked(t.key) });
+    });
+    const challengerRows = STATE.challengerResults.map(ev => {
+      const r = ev.result.find(x => x.name === name);
+      return r ? { key: ev.triggerKey, name: ev.triggerName, dates: ev.dates, rank: r.rank, challengerPts: r.challengerPts, wrPts: r.owgrPts } : null;
+    }).filter(Boolean);
+    return { tournamentRows, challengerRows };
+  }
+  let playerModalKeyHandler = null;
+  function closePlayerModal() {
+    document.getElementById('player-modal-root').innerHTML = '';
+    if (playerModalKeyHandler) { document.removeEventListener('keydown', playerModalKeyHandler); playerModalKeyHandler = null; }
+  }
+  function showPlayerModal(name) {
+    const { tournamentRows, challengerRows } = playerResultsHistory(name);
+    const country = NAME_INDEX.get(name) || '';
+    const root = document.getElementById('player-modal-root');
+    root.innerHTML = '';
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) closePlayerModal(); });
+    const box = document.createElement('div');
+    box.className = 'modal-box';
+    overlay.appendChild(box);
+    root.appendChild(overlay);
+    playerModalKeyHandler = (e) => { if (e.key === 'Escape') closePlayerModal(); };
+    document.addEventListener('keydown', playerModalKeyHandler);
+
+    const totalPlayed = tournamentRows.length + challengerRows.length;
+    box.innerHTML = `<div class="modal-head"><h2>${name}${country ? ` <span class="mono" style="font-size:0.85rem;color:var(--ink-faint);font-weight:400;">${country}</span>` : ''}</h2><button class="modal-close" aria-label="Close">&times;</button></div>
+      <p class="view-note" style="margin:0 0 10px;">${totalPlayed ? `${totalPlayed} result${totalPlayed === 1 ? '' : 's'} entered so far this season.` : 'No results yet — nothing entered for this player so far.'}</p>`;
+    box.querySelector('.modal-close').addEventListener('click', closePlayerModal);
+
+    if (tournamentRows.length) {
+      box.insertAdjacentHTML('beforeend', '<h3>Championship Series, Majors &amp; THE PLAYERS</h3>');
+      const wrap = document.createElement('div');
+      wrap.className = 'table-wrap';
+      wrap.innerHTML = `<table><thead><tr><th>Tournament</th><th>Pos</th><th>Score</th><th>Champ. pts</th><th>WR pts</th><th>Status</th></tr></thead><tbody></tbody></table>`;
+      const tbody = wrap.querySelector('tbody');
+      tournamentRows.forEach(r => {
+        const tr = document.createElement('tr');
+        const scoreCell = r.total === null ? '<span class="dash">–</span>' : fmtToPar(r.total);
+        tr.innerHTML = `<td class="name">${r.name}</td><td class="rk mono">${r.missed ? 'MC' : (r.posLabel || '<span class="dash">–</span>')}</td><td class="num mono">${scoreCell}</td><td class="num mono">${r.champPts.toFixed(2)}</td><td class="num mono">${r.wrPts.toFixed(4)}</td><td class="num mono">${r.locked ? '&#10003; final' : 'live'}</td>`;
+        tbody.appendChild(tr);
+      });
+      box.appendChild(wrap);
+    }
+    if (challengerRows.length) {
+      box.insertAdjacentHTML('beforeend', '<h3>Challenger Series</h3>');
+      const wrap = document.createElement('div');
+      wrap.className = 'table-wrap';
+      wrap.innerHTML = `<table><thead><tr><th>Event (week)</th><th>Pos</th><th>Challenger pts</th><th>WR pts</th></tr></thead><tbody></tbody></table>`;
+      const tbody = wrap.querySelector('tbody');
+      challengerRows.forEach(r => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td class="name">${r.name}</td><td class="rk mono">${r.rank}</td><td class="num mono">${r.challengerPts.toFixed(2)}</td><td class="num mono">${r.wrPts.toFixed(4)}</td>`;
+        tbody.appendChild(tr);
+      });
+      box.appendChild(wrap);
+    }
+  }
   // Both boards' movement arrows compare "now" to "right before the most
   // recently submitted tournament" — reconstructed by rolling that one
   // tournament (and its Challenger Series companion) back out of the same
@@ -2097,7 +2220,7 @@
     const lastKey = lastCompletedTournamentKey();
     attachMovement(rows, lastKey ? computeStandings(lastKey).champ : null, ([, pts]) => pts > 0);
     el.innerHTML = `<div class="view-head"><h2>Championship Series Points</h2><div class="meta">${rows.length} players on the board</div></div>
-      <p class="view-note">Season points from every Championship Series event, THE PLAYERS, and all four majors — recalculated live from whatever's entered in Round 1&ndash;4. Point values follow the <a href="https://en.wikipedia.org/wiki/List_of_point_distributions_of_the_FedEx_Cup" style="color:inherit;">FedEx Cup distribution</a> by tier (Signature-tier for the ${DATA.tournaments.filter(t => t.group === 'champ' && !MATCH_PLAY_KEYS.has(t.key)).length} Championship Series events, Major-tier for majors and THE PLAYERS). Entirely separate from the Challenger Series board — Challenger results never move this one. The Move column shows the shift caused by the last tournament submitted${lastKey ? ` (${byKey[lastKey].name})` : ''}. Wins and Top 10 count actual finishes from completed, locked tournaments only (a resolved playoff credits one win, not a tie). The top 90 here qualify for the Championship Series Finale; the Group Stage and Knockout that follow it are match play and don't add any more points.</p>`;
+      <p class="view-note">Season points from every Championship Series event, THE PLAYERS, and all four majors — recalculated live from whatever's entered in Round 1&ndash;4. Point values follow the <a href="https://en.wikipedia.org/wiki/List_of_point_distributions_of_the_FedEx_Cup" style="color:inherit;">FedEx Cup distribution</a> by tier (Signature-tier for the ${DATA.tournaments.filter(t => t.group === 'champ' && !MATCH_PLAY_KEYS.has(t.key)).length} Championship Series events, Major-tier for majors and THE PLAYERS). Entirely separate from the Challenger Series board — Challenger results never move this one. The Move column shows the shift caused by the last tournament submitted${lastKey ? ` (${byKey[lastKey].name})` : ''}. Wins and Top 10 count actual finishes from completed, locked tournaments only (a resolved playoff credits one win, not a tie). The top 90 here qualify for the Championship Series Finale; the Group Stage and Knockout that follow it are match play and don't add any more points. Click a player's name for their full results so far.</p>`;
     if (!rows.length) { el.innerHTML += '<p class="view-note">No results yet — enter scores in Round 1&ndash;4 to populate this board.</p>'; return; }
     standingsTable(el, rows, 90, 'Championship Series Finale cutoff — top 90 advance', true);
   }
@@ -2110,7 +2233,7 @@
     const lastKey = lastCompletedTournamentKey();
     attachMovement(rows, lastKey ? computeStandings(lastKey).owgr : null);
     el.innerHTML = `<div class="view-head"><h2>World Ranking</h2><div class="meta">${rows.length} ranked players</div></div>
-      <p class="view-note">Average points — total points divided by ${OWGR_DIVISOR} — starting from the real OWGR snapshot (<a href="https://www.owgr.com/current-world-ranking" style="color:inherit;">owgr.com, Aug 2026</a>) and moving with every tournament entered in Round 1&ndash;4, including Challenger Series results at half value. Raw points per finish follow the real OWGR curve for a <a href="https://www.owgr.com/events/the-154th-open-11468" style="color:inherit;">major</a> or a <a href="https://www.owgr.com/events/cadillac-championship-11319" style="color:inherit;">regular event</a>, by tier, before being folded into the ${OWGR_DIVISOR}-divisor average. This is live, not a fixed snapshot. The Move column shows the shift caused by the last tournament submitted${lastKey ? ` (${byKey[lastKey].name})` : ''}.</p>`;
+      <p class="view-note">Average points — total points divided by ${OWGR_DIVISOR} — starting from the real OWGR snapshot (<a href="https://www.owgr.com/current-world-ranking" style="color:inherit;">owgr.com, Aug 2026</a>) and moving with every tournament entered in Round 1&ndash;4, including Challenger Series results at half value. Raw points per finish follow the real OWGR curve for a <a href="https://www.owgr.com/events/the-154th-open-11468" style="color:inherit;">major</a> or a <a href="https://www.owgr.com/events/cadillac-championship-11319" style="color:inherit;">regular event</a>, by tier, before being folded into the ${OWGR_DIVISOR}-divisor average. This is live, not a fixed snapshot. The Move column shows the shift caused by the last tournament submitted${lastKey ? ` (${byKey[lastKey].name})` : ''}. Click a player's name for their full results so far.</p>`;
     standingsTable(el, rows);
   }
 
@@ -2169,7 +2292,7 @@
     const lastChallengerKey = STATE.challengerLog.length ? STATE.challengerLog[STATE.challengerLog.length - 1] : null;
     attachMovement(rows, lastChallengerKey ? computeStandings(lastChallengerKey).challenger : null, ([, pts]) => pts > 0);
     el.innerHTML = `<div class="view-head"><h2>Challenger Series Standings</h2><div class="meta">${rows.length} players on the board</div></div>
-      <p class="view-note">Season points from the auto-run Challenger Series companion events, at the same per-tournament value as the real Championship Series (Signature-tier FedEx Cup points) — but this board and that one never affect each other. The Move column shows the shift caused by the last Challenger Series event${lastChallengerKey ? ` (triggered by ${byKey[lastChallengerKey].name})` : ''}. Wins and Top 10 tally actual finishes across every Challenger Series event run so far.</p>`;
+      <p class="view-note">Season points from the auto-run Challenger Series companion events, at the same per-tournament value as the real Championship Series (Signature-tier FedEx Cup points) — but this board and that one never affect each other. The Move column shows the shift caused by the last Challenger Series event${lastChallengerKey ? ` (triggered by ${byKey[lastChallengerKey].name})` : ''}. Wins and Top 10 tally actual finishes across every Challenger Series event run so far. Click a player's name for their full results so far.</p>`;
     if (!rows.length) { el.innerHTML += '<p class="view-note">No Challenger Series events have run yet.</p>'; return; }
     standingsTable(el, rows, null, null, true);
   }

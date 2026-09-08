@@ -1859,8 +1859,8 @@
       ['r1', 'r2', 'r3', 'r4'].forEach((rk, i) => {
         headRow.appendChild(roundHeaderTh('R' + (i + 1), rk, () => sortMode, (m) => { sortMode = m; }, draw));
       });
-      headRow.appendChild(th('Thru'));
       headRow.appendChild(th('Total'));
+      headRow.appendChild(th('Thru'));
       headRow.appendChild(th('WR pts'));
       thead.appendChild(headRow);
       table.appendChild(thead);
@@ -1887,13 +1887,13 @@
           tr.style.opacity = '0.55';
           tr.innerHTML = `<td class="rk mono">MC</td><td class="num mono">${movementHtml(null)}</td><td class="name">${r.p.name}</td><td class="ctry">${r.p.country}</td>
             <td class="num mono">${cell(r.rounds[0], r.complete[0])}</td><td class="num mono">${cell(r.rounds[1], r.complete[1])}</td><td class="num mono">–</td><td class="num mono">–</td>
-            <td class="num mono">2/4</td><td class="num mono">${r.total === null ? '<span class="dash">–</span>' : fmtToPar(r.total)}</td><td class="num mono">${wrCell}</td>`;
+            <td class="num mono">${r.total === null ? '<span class="dash">–</span>' : fmtToPar(r.total)}</td><td class="num mono">2/4</td><td class="num mono">${wrCell}</td>`;
         } else {
           const posCell = useLabel ? (r.posLabel || '<span class="dash">–</span>') : idx + 1;
           const totalCls = r.total === null ? '' : r.total < 0 ? 'good' : r.total > 0 ? 'bad' : '';
           tr.innerHTML = `<td class="rk mono">${posCell}</td><td class="num mono">${movementHtml(r.movement)}</td><td class="name">${r.p.name}</td><td class="ctry">${r.p.country}</td>
             <td class="num mono">${cell(r.rounds[0], r.complete[0])}</td><td class="num mono">${cell(r.rounds[1], r.complete[1])}</td><td class="num mono">${cell(r.rounds[2], r.complete[2])}</td><td class="num mono">${cell(r.rounds[3], r.complete[3])}</td>
-            <td class="num mono">${thruCell}</td><td class="num mono score-total ${totalCls}">${totalHtml}</td><td class="num mono">${wrCell}</td>`;
+            <td class="num mono score-total ${totalCls}">${totalHtml}</td><td class="num mono">${thruCell}</td><td class="num mono">${wrCell}</td>`;
         }
         tbody.appendChild(tr);
       });

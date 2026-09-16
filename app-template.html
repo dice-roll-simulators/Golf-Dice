@@ -941,6 +941,21 @@
     });
     return names;
   }
+  // Named players guaranteed a spot in every regular Challenger Series
+  // event this season (the Finale is exempt — its top-90 field stays
+  // purely standings-based, since guaranteeing someone into that would be
+  // a real results advantage, not just more starts). This only affects
+  // whether they're IN the field; the finish-order draw right below still
+  // weighs them by their real blended rank like anyone else, so it's not
+  // a results advantage either — just more chances to play. A function
+  // (not a top-level const) since this is needed the moment the app
+  // starts up, before a top-level const further down the script would
+  // yet be initialized.
+  function guaranteedChallengerPlayers() {
+    const names = pastChallengerWinners();
+    names.add('Will Zalatoris');
+    return names;
+  }
   // The depth pool re-ordered by a blend of its fixed rank and the CURRENT
   // Challenger Series standings — `t` 0 is pure depth-pool rank (this
   // season's very first Challenger event), `t` 1 is pure current-standings
@@ -972,7 +987,7 @@
     if (trigger.key === 'finale') return runChallengerFinale(trigger);
     const size = 120 + Math.floor(Math.random() * 21); // 120-140
     const blendedOrder = challengerBlendedOrder(challengerSkewProgress());
-    const guaranteed = pastChallengerWinners();
+    const guaranteed = guaranteedChallengerPlayers();
     const guaranteedPlayers = blendedOrder.filter(p => guaranteed.has(p.name));
     const restPool = blendedOrder.filter(p => !guaranteed.has(p.name));
     const remainingSlots = Math.max(size - guaranteedPlayers.length, 0);
@@ -2287,7 +2302,7 @@
     const el = viewContainer('challengertournament');
     const results = STATE.challengerResults;
     el.innerHTML = `<div class="view-head"><h2>Challenger Series Tournament</h2><div class="meta">${results.length} event${results.length === 1 ? '' : 's'} run</div></div>
-      <p class="view-note">Every time a Championship Series event finishes (round 1 cut through round 4), a companion Challenger Series event auto-runs here — a randomised, weighted result drawn from the real 121+ depth pool, ranks 121&ndash;${120 + DATA.backgroundPool.length}. Field size varies 120&ndash;140 each time, skewing more toward the current Challenger Series leaders as the season goes on, and anyone who's already won a Challenger Series event this season is guaranteed a spot in every one after. It has no effect on the Championship Series board; it feeds the Challenger Series Standings tab at full value and the World Ranking at half value. Each event can be re-rolled up to twice with "Refresh" below it. The Championship Series Finale triggers its own Challenger Series Finale — field is exactly the top 90 on the Challenger Series standings at that point, no random draw for who's in it.</p>`;
+      <p class="view-note">Every time a Championship Series event finishes (round 1 cut through round 4), a companion Challenger Series event auto-runs here — a randomised, weighted result drawn from the real 121+ depth pool, ranks 121&ndash;${120 + DATA.backgroundPool.length}. Field size varies 120&ndash;140 each time, skewing more toward the current Challenger Series leaders as the season goes on, and anyone who's already won a Challenger Series event this season is guaranteed a spot in every one after. Will Zalatoris is guaranteed a spot in every regular Challenger Series event this season too, though not the Finale (whose top-90 field stays purely standings-based) — a guaranteed start, not an edge in how he does once he's in it, since the finish-order draw still weighs him the same as everyone else. It has no effect on the Championship Series board; it feeds the Challenger Series Standings tab at full value and the World Ranking at half value. Each event can be re-rolled up to twice with "Refresh" below it. The Championship Series Finale triggers its own Challenger Series Finale — field is exactly the top 90 on the Challenger Series standings at that point, no random draw for who's in it.</p>`;
     if (!results.length) {
       el.innerHTML += '<p class="view-note">Nothing yet — complete a Championship Series event (all rounds, cut included) in Round 1&ndash;4 to trigger the first one.</p>';
       return;

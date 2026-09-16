@@ -2025,18 +2025,23 @@
   // position (e.g. the Championship Series Finale's top-90 cutoff).
   // `showCareerStats`, when true, adds Wins/Top 10 columns off each row's
   // `.wins`/`.top10` (counts of actual finishes in the tournament tabs so
-  // far — see computeCareerStats/computeChallengerCareerStats).
-  function standingsTable(el, rows, cutoffAfter, cutoffLabel, showCareerStats) {
+  // far — see computeCareerStats/computeChallengerCareerStats). `showMissedCuts`,
+  // when true, adds a Missed Cuts column (off `.missedCuts`) as the
+  // furthest right-hand column — Championship Series only, since the
+  // Challenger Series has no cut mechanic.
+  function standingsTable(el, rows, cutoffAfter, cutoffLabel, showCareerStats, showMissedCuts) {
     const wrap = document.createElement('div');
     const extraHead = showCareerStats ? '<th>Wins</th><th>Top 10</th>' : '';
-    wrap.innerHTML = `<div class="table-wrap"><table><thead><tr><th>Pos</th><th>Move</th><th>Player</th><th>Ctry</th><th>Points</th>${extraHead}</tr></thead><tbody></tbody></table></div>`;
+    const mcHead = showMissedCuts ? '<th>Missed Cuts</th>' : '';
+    wrap.innerHTML = `<div class="table-wrap"><table><thead><tr><th>Pos</th><th>Move</th><th>Player</th><th>Ctry</th><th>Points</th>${extraHead}${mcHead}</tr></thead><tbody></tbody></table></div>`;
     const tbody = wrap.querySelector('tbody');
-    const colCount = showCareerStats ? 7 : 5;
+    const colCount = 5 + (showCareerStats ? 2 : 0) + (showMissedCuts ? 1 : 0);
     rows.forEach((r, i) => {
       const tr = document.createElement('tr');
       tr.dataset.name = r.name.toLowerCase();
       const extraCells = showCareerStats ? `<td class="num mono">${r.wins || 0}</td><td class="num mono">${r.top10 || 0}</td>` : '';
-      tr.innerHTML = `<td class="rk mono">${i + 1}</td><td class="num mono">${movementHtml(r.movement)}</td><td class="name clickable">${r.name}</td><td class="ctry">${r.country || ''}</td><td class="num mono">${r.points.toFixed(2)}</td>${extraCells}`;
+      const mcCell = showMissedCuts ? `<td class="num mono">${r.missedCuts || 0}</td>` : '';
+      tr.innerHTML = `<td class="rk mono">${i + 1}</td><td class="num mono">${movementHtml(r.movement)}</td><td class="name clickable">${r.name}</td><td class="ctry">${r.country || ''}</td><td class="num mono">${r.points.toFixed(2)}</td>${extraCells}${mcCell}`;
       tbody.appendChild(tr);
       tr.querySelector('.name').addEventListener('click', () => showPlayerModal(r.name));
       if (cutoffAfter && i + 1 === cutoffAfter && i + 1 < rows.length) {
@@ -2059,11 +2064,12 @@
   // Positions honor a resolved playoff the same way points do (a broken tie
   // credits one win, not two).
   function computeCareerStats() {
-    const wins = {}, top10 = {};
+    const wins = {}, top10 = {}, missedCuts = {};
     DATA.tournaments.forEach(t => {
       if (MATCH_PLAY_KEYS.has(t.key)) return;
       if (!isTournamentComplete(t.key)) return;
       const cut = computeCut(t.key);
+      if (cut) cut.missedCut.forEach(name => { missedCuts[name] = (missedCuts[name] || 0) + 1; });
       const rows = t.field.map(p => {
         if (cut && cut.missedCut.has(p.name)) return null;
         const rounds = [1, 2, 3, 4].map(n => roundValue(t.key, n, p.name));
@@ -2085,7 +2091,7 @@
         i = j + 1;
       }
     });
-    return { wins, top10 };
+    return { wins, top10, missedCuts };
   }
   // Same idea for the Challenger Series — every auto-run event already
   // produces a strict 1..N rank with no ties, so this is a direct tally.
@@ -2227,14 +2233,26 @@
     function draw() {
       const completedOnly = !showProjected;
       const { champ } = computeStandings(undefined, undefined, completedOnly);
-      const { wins, top10 } = computeCareerStats();
+      const { wins, top10, missedCuts } = computeCareerStats();
       const rows = Object.entries(champ)
         .filter(([, pts]) => pts > 0)
-        .map(([name, pts]) => ({ name, country: NAME_INDEX.get(name), points: pts, wins: wins[name] || 0, top10: top10[name] || 0 }))
-        .sort((a, b) => b.points - a.points);
+        .map(([name, pts]) => ({ name, country: NAME_INDEX.get(name), points: pts, wins: wins[name] || 0, top10: top10[name] || 0, missedCuts: missedCuts[name] || 0 }));
+      // All 120 qualified Championship roster players belong on this board
+      // even before they've earned a point or made a cut — union in
+      // whoever isn't already there at 0 points. Still pull their real
+      // wins/top10/missedCuts (a missed cut itself earns 0 points, so a
+      // player can easily reach this branch with real stats to show).
+      const seen = new Set(rows.map(r => r.name));
+      byKey.farmers.field.forEach(p => {
+        if (seen.has(p.name)) return;
+        rows.push({ name: p.name, country: p.country, points: 0, wins: wins[p.name] || 0, top10: top10[p.name] || 0, missedCuts: missedCuts[p.name] || 0 });
+        seen.add(p.name);
+      });
+      rows.sort((a, b) => b.points - a.points || compareBySurname(a.name, b.name));
       const lastKey = lastCompletedTournamentKey();
       const prevChamp = lastKey ? computeStandings(lastKey, undefined, completedOnly).champ : null;
       attachMovement(rows, prevChamp, ([, pts]) => pts > 0);
+      rows.forEach(r => { if (r.points === 0) r.movement = null; }); // never scored -> nothing to have "moved" from
       const modeNote = completedOnly
         ? 'Showing only points from tournaments that are complete and locked — an event still in progress doesn\'t move this board yet.'
         : 'Showing a live projection, including whatever\'s entered so far in any tournament still in progress — this will keep changing until that event is actually locked in.';
@@ -2243,12 +2261,11 @@
           <button class="btn${completedOnly ? ' primary' : ''}" data-mode="completed">Completed only</button>
           <button class="btn${!completedOnly ? ' primary' : ''}" data-mode="projected">Include in-progress (projected)</button>
         </div>
-        <p class="view-note">${modeNote} Season points from every Championship Series event, THE PLAYERS, and all four majors. Point values follow the <a href="https://en.wikipedia.org/wiki/List_of_point_distributions_of_the_FedEx_Cup" style="color:inherit;">FedEx Cup distribution</a> by tier (Signature-tier for the ${DATA.tournaments.filter(t => t.group === 'champ' && !MATCH_PLAY_KEYS.has(t.key)).length} Championship Series events, Major-tier for majors and THE PLAYERS). Entirely separate from the Challenger Series board — Challenger results never move this one. The Move column shows the shift caused by the last tournament submitted${lastKey ? ` (${byKey[lastKey].name})` : ''}. Wins and Top 10 count actual finishes from completed, locked tournaments only regardless of this filter (a resolved playoff credits one win, not a tie). The top 90 here qualify for the Championship Series Finale; the Group Stage and Knockout that follow it are match play and don't add any more points. Click a player's name for their full results so far.</p>`;
+        <p class="view-note">${modeNote} Season points from every Championship Series event, THE PLAYERS, and all four majors. Point values follow the <a href="https://en.wikipedia.org/wiki/List_of_point_distributions_of_the_FedEx_Cup" style="color:inherit;">FedEx Cup distribution</a> by tier (Signature-tier for the ${DATA.tournaments.filter(t => t.group === 'champ' && !MATCH_PLAY_KEYS.has(t.key)).length} Championship Series events, Major-tier for majors and THE PLAYERS). Entirely separate from the Challenger Series board — Challenger results never move this one. The Move column shows the shift caused by the last tournament submitted${lastKey ? ` (${byKey[lastKey].name})` : ''}. All 120 Championship roster players are listed even at 0 points. Wins, Top 10, and Missed Cuts count actual finishes from completed, locked tournaments only regardless of this filter (a resolved playoff credits one win, not a tie). The top 90 here qualify for the Championship Series Finale; the Group Stage and Knockout that follow it are match play and don't add any more points. Click a player's name for their full results so far.</p>`;
       el.querySelectorAll('#champ-points-filter button').forEach(btn => {
         btn.addEventListener('click', () => { showProjected = btn.dataset.mode === 'projected'; draw(); });
       });
-      if (!rows.length) { el.insertAdjacentHTML('beforeend', `<p class="view-note">${completedOnly ? 'No completed, locked results yet — finish and lock a tournament to populate this board, or switch to "Include in-progress" for a live projection.' : 'No results yet — enter scores in Round 1&ndash;4 to populate this board.'}</p>`); return; }
-      standingsTable(el, rows, 90, 'Championship Series Finale cutoff — top 90 advance', true);
+      standingsTable(el, rows, 90, 'Championship Series Finale cutoff — top 90 advance', true, true);
     }
     draw();
   }

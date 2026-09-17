@@ -268,6 +268,23 @@
     if (!(key in STATE.challengerRefreshCounts)) STATE.challengerRefreshCounts[key] = 1;
   });
 
+  // Backfill made-up names onto any Challenger Series event already run in
+  // a save from before that feature existed — otherwise every event
+  // completed before this update stays stuck showing its triggering
+  // Championship Series event's own name forever, even though every new
+  // one from here on gets a real one.
+  (function backfillChallengerEventNames() {
+    const usedNames = new Set(STATE.challengerResults.filter(ev => ev.name).map(ev => ev.name));
+    let changed = false;
+    STATE.challengerResults.forEach(ev => {
+      if (ev.name) return;
+      ev.name = generateChallengerEventName(usedNames);
+      usedNames.add(ev.name);
+      changed = true;
+    });
+    if (changed) saveState();
+  })();
+
   // One-time data-quality fix: "Im Sung-jae" in the old depth pool was a
   // duplicate of Sungjae Im (already in the fixed 120) under his Korean
   // name order. He's gone from the pool now — erase him from any

@@ -131,12 +131,23 @@ pushChamp('travelers', 'scottishopen');
 tournaments.push({ key: 'open', name: 'The Open Championship', dates: 'Jul 20–23', group: 'major', field: [], cutSize: cutSizeFor('open') });
 pushChamp('finale', 'matchgroup', 'matchko');
 
+// Last Chance Series — a season-end, four-stage relegation/promotion
+// gauntlet, built and played entirely client-side once every other event
+// (Finale + Knockout) is done. Field shrinks 60 -> 50 -> 40 -> 30; no
+// internal 36-hole cut (cutSize == field size means nobody misses one —
+// elimination happens BETWEEN stages, not mid-stage), and it never
+// contributes to this season's Championship Series/World Ranking points.
+tournaments.push({ key: 'lastchance1', name: 'Last Chance Series — Stage 1', dates: 'Sep 14–17', group: 'lastchance', field: [], cutSize: 60 });
+tournaments.push({ key: 'lastchance2', name: 'Last Chance Series — Stage 2', dates: 'Sep 21–24', group: 'lastchance', field: [], cutSize: 50 });
+tournaments.push({ key: 'lastchance3', name: 'Last Chance Series — Stage 3', dates: 'Sep 28–Oct 1', group: 'lastchance', field: [], cutSize: 40 });
+tournaments.push({ key: 'lastchance4', name: 'Last Chance Series — Final', dates: 'Oct 5–8', group: 'lastchance', field: [], cutSize: 30 });
+
 // Champ-group tournaments all share one roster rather than each carrying a copy.
 const roster = championshipRoster();
 tournaments.forEach((t) => { if (t.group === 'champ' && !DYNAMIC_CHAMP_KEYS.has(t.key)) t.field = roster; });
 // Re-sort into the real chronological order for display — THE PLAYERS and
 // each major slot in right after the event that immediately precedes it.
-const ORDER = ['farmers', 'phoenix', 'pebble', 'genesis', 'miami', 'arnold', 'players', 'houston', 'masters', 'heritage', 'truist', 'pga', 'memorial', 'usopen', 'travelers', 'scottishopen', 'open', 'finale', 'matchgroup', 'matchko'];
+const ORDER = ['farmers', 'phoenix', 'pebble', 'genesis', 'miami', 'arnold', 'players', 'houston', 'masters', 'heritage', 'truist', 'pga', 'memorial', 'usopen', 'travelers', 'scottishopen', 'open', 'finale', 'matchgroup', 'matchko', 'lastchance1', 'lastchance2', 'lastchance3', 'lastchance4'];
 tournaments.sort((a, b) => ORDER.indexOf(a.key) - ORDER.indexOf(b.key));
 
 // Champ events all share one `field` array/order (the roster, by ranking) —

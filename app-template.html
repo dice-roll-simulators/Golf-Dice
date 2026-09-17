@@ -198,7 +198,7 @@
   <nav class="sidebar" id="sidebar">
     <div class="brand">
       <div class="eyebrow">Fairway Draft Board</div>
-      <h1>2028 Season</h1>
+      <h1 id="season-header">2028 Season</h1>
     </div>
   </nav>
   <main class="main">
@@ -232,6 +232,13 @@
       scores: {}, roundLocked: {}, roundSelections: { r1: null, r2: null, r3: null, r4: null }, diceLog: { d1: [], d2: [], d3: [], d4: [] },
       challengerLog: [], challengerResults: [], challengerRefreshed: [], challengerRefreshCounts: {}, completionLog: [],
       majorFields: {}, legacyStartingOwgr: {}, matchPlay: null, playoffs: {},
+      // Multi-season progression: null here means "not yet bootstrapped" —
+      // filled in from the static DATA the first time the app ever loads,
+      // then this becomes the actual source of truth for who's in the
+      // Championship roster / depth pool, since DATA itself is immutable
+      // static JSON and can't carry a promoted/relegated roster across seasons.
+      seasonNumber: 1, seasonYear: null, currentRoster: null, currentDepthPool: null,
+      playerBirthYears: {}, lastSeasonSummary: null, seasonStartingOwgr: {},
     };
   }
   let STATE = defaultState();
@@ -283,11 +290,44 @@
     if (STATE.roundSelections[k] && !byKey[STATE.roundSelections[k]]) STATE.roundSelections[k] = null;
   });
 
+  // ---------------- multi-season roster bootstrap ----------------
+  // First-ever load: seed the live roster/depth pool from the static
+  // season-1 DATA. Every later load just reuses whatever STATE already
+  // has — which is the whole point, since a promoted/relegated roster
+  // from a season transition has to live somewhere DATA itself can't.
+  if (STATE.seasonYear === null) STATE.seasonYear = DATA.year;
+  if (!STATE.currentRoster) STATE.currentRoster = JSON.parse(JSON.stringify(byKey.farmers.field));
+  if (!STATE.currentDepthPool) STATE.currentDepthPool = JSON.parse(JSON.stringify(DATA.backgroundPool));
+  // Points every non-dynamic champ tournament's `field` at the CURRENT
+  // season's roster (never DATA's original, static one) and gives each a
+  // fresh independent tee-order shuffle — the same "varied Round 1 order"
+  // treatment every champ event already gets, just re-rolled per season.
+  function applyCurrentRosterToChampFields() {
+    DATA.tournaments.forEach(t => {
+      if (t.group !== 'champ' || t.key === 'finale' || t.key === 'matchgroup' || t.key === 'matchko') return;
+      t.field = STATE.currentRoster;
+      t.startOrder = shuffledClient(STATE.currentRoster).map(p => p.name);
+    });
+  }
+  applyCurrentRosterToChampFields();
+  // DATA is rebuilt fresh from the static season-1 JSON on every load, so a
+  // season transition's carried-forward World Ranking baselines (a
+  // continuing player's real final average; a brand-new player's starting
+  // one) have to be persisted here in STATE and reapplied on top of it —
+  // same idea as legacyStartingOwgr above, just for every player at once.
+  Object.entries(STATE.seasonStartingOwgr).forEach(([name, avg]) => { DATA.startingOwgr[name] = avg; });
+  saveState();
+  function updateSeasonHeader() {
+    const el = document.getElementById('season-header');
+    if (el) el.textContent = `${STATE.seasonYear} Season`;
+  }
+  updateSeasonHeader();
+
   // Global name -> country index, so any player (roster, depth pool, past
   // champion, club pro) can be labeled on the Standings tabs.
   const NAME_INDEX = new Map();
   DATA.tournaments.forEach(t => t.field.forEach(p => NAME_INDEX.set(p.name, p.country)));
-  DATA.backgroundPool.forEach(p => NAME_INDEX.set(p.name, p.country));
+  STATE.currentDepthPool.forEach(p => NAME_INDEX.set(p.name, p.country));
 
   // ---------------- live major / THE PLAYERS field construction ----------------
   // THE PLAYERS and the four majors no longer ship with a predetermined
@@ -297,12 +337,95 @@
   // PGA Championship club pros) work exactly as before; only the "top N
   // ranking/points" portion is now a genuine snapshot instead of a fixed
   // pre-season one.
-  const ALL_PLAYERS = (() => {
-    const champT = DATA.tournaments.find(t => t.group === 'champ');
-    return [...champT.field, ...DATA.backgroundPool];
-  })();
-  const ALL_PLAYERS_BY_NAME = new Map(ALL_PLAYERS.map(p => [p.name, p]));
+  // `let`, not `const` — a season transition swaps in a new roster/depth
+  // pool, so this has to be rebuildable rather than fixed at first load.
+  let ALL_PLAYERS = [...STATE.currentRoster, ...STATE.currentDepthPool];
+  let ALL_PLAYERS_BY_NAME = new Map(ALL_PLAYERS.map(p => [p.name, p]));
+  function refreshAllPlayers() {
+    ALL_PLAYERS = [...STATE.currentRoster, ...STATE.currentDepthPool];
+    ALL_PLAYERS_BY_NAME = new Map(ALL_PLAYERS.map(p => [p.name, p]));
+  }
   const EU_COUNTRIES = ["ENG", "SCO", "IRL", "WAL", "FRA", "GER", "SWE", "ESP", "ITA", "NOR", "DEN", "BEL", "NED", "AUT", "FIN"];
+
+  // ---------------- procedural prospect name generator ----------------
+  // Used for the Last Chance Series' seeded "PGA Tour U / Korn Ferry Tour"
+  // golfers and for the fresh prospects added to the depth pool every
+  // season. A function, not a top-level const, so it's never read before
+  // its own initializer during startup (see the two TDZ bugs already hit
+  // this session with similarly-shaped top-level lookup tables).
+  function prospectNamePools() {
+    return {
+      USA: {
+        first: ['Jake', 'Tyler', 'Cameron', 'Austin', 'Hunter', 'Colton', 'Brody', 'Dawson', 'Chase', 'Trevor', 'Brooks', 'Garrett', 'Mason', 'Wyatt', 'Cole', 'Blake', 'Tanner', 'Grant', 'Logan', 'Parker'],
+        last: ['Whitfield', 'Hargrove', 'Callahan', 'Prescott', 'Radford', 'Duncan', 'Ellison', 'Tatum', 'Winslow', 'Kirkland', 'Ashby', 'Merritt', 'Sawyer', 'Thorne', 'Holloway', 'Lassiter', 'Crenshaw', 'Tolbert', 'Nash', 'Griggs'],
+        country: 'USA',
+      },
+      ENG: { first: ['Oliver', 'Harry', 'George', 'Jack', 'Freddie', 'Charlie', 'Alfie', 'Archie', 'Toby', 'Finlay'], last: ['Pemberton', 'Ashcroft', 'Fairweather', 'Lowther', 'Whitmore', 'Dacre', 'Sherwin', 'Barlow', 'Tremaine', 'Eastwick'], country: 'ENG' },
+      SWE: { first: ['Erik', 'Anton', 'Viktor', 'Gustav', 'Oscar', 'Filip', 'Linus', 'Axel', 'Emil', 'Hugo'], last: ['Lindqvist', 'Bergstrom', 'Nilsson', 'Sandberg', 'Wahlgren', 'Holmqvist', 'Sjoberg', 'Ekstrom', 'Fransson', 'Lindgren'], country: 'SWE' },
+      KOR: { first: ['Min-jun', 'Seo-jun', 'Do-yun', 'Ji-ho', 'Tae-yang', 'Joon-ho', 'Hyun-woo', 'Sung-min', 'Woo-jin', 'Kang-min'], last: ['Kim', 'Lee', 'Park', 'Choi', 'Jung', 'Kang', 'Yoon', 'Lim', 'Han', 'Shin'], country: 'KOR' },
+      JPN: { first: ['Haruto', 'Sota', 'Ren', 'Yuto', 'Kaito', 'Riku', 'Sora', 'Yamato', 'Daiki', 'Hinata'], last: ['Watanabe', 'Kobayashi', 'Yamamoto', 'Nakamura', 'Ito', 'Saito', 'Matsumoto', 'Inoue', 'Kimura', 'Hayashi'], country: 'JPN' },
+      RSA: { first: ['Pieter', 'Jaco', 'Riaan', 'Dawie', 'Johan', 'Willem', 'Stefan', 'Heinrich', 'Andre', 'Marius'], last: ['Botha', 'Du Plessis', 'Van Wyk', 'Kruger', 'Nel', 'Pretorius', 'Fourie', 'Erasmus', 'Venter', 'Steyn'], country: 'RSA' },
+      AUS: { first: ['Lachlan', 'Riley', 'Jayden', 'Ky', 'Corey', 'Zach', 'Nathan', 'Brayden', 'Ethan', 'Hayden'], last: ['Ballantyne', 'Fenwick', 'Overton', 'Carrick', 'Blythe', 'Dunmore', 'Harkness', 'Speight', 'Colefax', 'Rutherglen'], country: 'AUS' },
+    };
+  }
+  // Draws `n` unique prospect names, `internationalCount` of them (rest
+  // American) drawn evenly across the non-USA pools above. Never collides
+  // with any name already in play anywhere in the app.
+  function generateProspectGolfers(n, internationalCount) {
+    const pools = prospectNamePools();
+    const intlKeys = Object.keys(pools).filter(k => k !== 'USA');
+    const existing = new Set(ALL_PLAYERS.map(p => p.name));
+    DATA.tournaments.forEach(t => t.field.forEach(p => existing.add(p.name)));
+    const intlSlots = new Set();
+    while (intlSlots.size < Math.min(internationalCount, n)) {
+      intlSlots.add(Math.floor(Math.random() * n));
+    }
+    const out = [];
+    for (let i = 0; i < n; i++) {
+      const poolKey = intlSlots.has(i) ? intlKeys[Math.floor(Math.random() * intlKeys.length)] : 'USA';
+      const pool = pools[poolKey];
+      let name, tries = 0;
+      do {
+        const f = pool.first[Math.floor(Math.random() * pool.first.length)];
+        const l = pool.last[Math.floor(Math.random() * pool.last.length)];
+        name = `${f} ${l}`;
+        tries++;
+      } while ((existing.has(name) || out.some(o => o.name === name)) && tries < 50);
+      existing.add(name);
+      out.push({ name, country: pool.country });
+    }
+    return out;
+  }
+
+  // ---------------- synthetic player-age system ----------------
+  // No real birth-year data exists (or is invented here) for the ~420 real,
+  // named professionals in this app — attaching a fabricated age to a real
+  // person's name is a real accuracy/reputational risk, so this is entirely
+  // a simulation-only mechanic layered on top for the age-based relegation
+  // rule, and every place it's shown in the UI says so explicitly. Each
+  // name is lazily assigned a birth year the first time it's looked up
+  // (skewed toward a golfer's prime, with a small tail reaching toward the
+  // 50+ threshold — deliberately kept thin, since every name in the
+  // 420-player universe gets assigned one in the very first season-ending
+  // age check, all at once), then persisted so it never changes again.
+  function assignBirthYear(referenceYear) {
+    const r = Math.random();
+    let age;
+    if (r < 0.8) age = 24 + Math.floor(Math.random() * 14); // 24-37, the bulk of the tour
+    else if (r < 0.96) age = 38 + Math.floor(Math.random() * 8); // 38-45
+    else age = 46 + Math.floor(Math.random() * 11); // 46-56, the thin aging tail
+    return referenceYear - age;
+  }
+  function getPlayerBirthYear(name) {
+    if (!(name in STATE.playerBirthYears)) {
+      STATE.playerBirthYears[name] = assignBirthYear(STATE.seasonYear);
+      saveState();
+    }
+    return STATE.playerBirthYears[name];
+  }
+  function getPlayerAge(name, asOfYear) {
+    return asOfYear - getPlayerBirthYear(name);
+  }
   // The event that must be locked in before each field can be built.
   const PRECEDING_EVENT = { players: 'arnold', masters: 'houston', pga: 'truist', usopen: 'memorial', open: 'scottishopen', finale: 'open' };
 
@@ -317,6 +440,14 @@
   // Shared explanation shown wherever a major/THE PLAYERS field isn't built
   // yet, naming the specific event that has to be locked in first.
   function fieldPendingNote(tKey) {
+    const t = byKey[tKey];
+    if (t && t.group === 'lastchance') {
+      const prevKey = lastChancePrev()[tKey];
+      if (!prevKey) {
+        return `The field hasn't been set yet — Stage 1 is built the moment the ${byKey.finale.name} and the Knockout bracket are both fully decided (every round locked, and a Knockout champion declared). Come back once the season's other business is settled.`;
+      }
+      return `The field hasn't been set yet — it's the top ${lastChanceSizes()[tKey]} finishers of <strong>${byKey[prevKey].name}</strong>, built the moment that stage is locked in. Come back once that's done.`;
+    }
     const pKey = PRECEDING_EVENT[tKey];
     const pName = pKey && byKey[pKey] ? byKey[pKey].name : 'the previous event';
     return `The field hasn't been set yet — it's built live from the World Ranking and Championship Series standings the moment <strong>${pName}</strong> is locked in (Leaderboard tab &rarr; Lock scores). Come back once that's done.`;
@@ -326,6 +457,13 @@
   // ranking/points cutoffs, snapshotted right when the preceding event
   // was confirmed.
   function fieldMakeupNote(t) {
+    if (t.group === 'lastchance') {
+      const prevKey = lastChancePrev()[t.key];
+      const body = prevKey
+        ? `the top ${lastChanceSizes()[t.key]} finishers of ${byKey[prevKey].name}.`
+        : `the bottom 30 of the Championship Series roster (91st&ndash;120th), the Challenger Series standings ranked 26th&ndash;45th, and 10 freshly generated PGA Tour U / Korn Ferry Tour prospects. Never earns Championship Series or World Ranking points — the top 5 in Stage 4 earn a promotion to next season's Championship Series roster instead.`;
+      return `<p class="view-note">Field set: ${body}</p>`;
+    }
     const pKey = PRECEDING_EVENT[t.key];
     const pName = pKey && byKey[pKey] ? byKey[pKey].name : null;
     const NOTES = {
@@ -505,6 +643,263 @@
     return changed;
   }
 
+  // ---------------- Last Chance Series ----------------
+  // A season-end, four-stage relegation/promotion gauntlet: Stage 1 fields
+  // the bottom 30 of the Championship roster, a contingent pulled from the
+  // Challenger Series, and 10 freshly generated prospects; every later
+  // stage is just the top N finishers of the one before it. It can't be
+  // built until the season's other business (Finale + Knockout) is fully
+  // decided — there's no such thing as "at risk" until the roster's real
+  // final order is known. Each stage's field never changes once built, same
+  // as a major's, and (per computeStandings/computeCareerStats/
+  // tournamentStandingsRows above) never earns this season's Championship
+  // Series or World Ranking points.
+  function lastChanceKeys() { return ['lastchance1', 'lastchance2', 'lastchance3', 'lastchance4']; }
+  function lastChanceSizes() { return { lastchance1: 60, lastchance2: 50, lastchance3: 40, lastchance4: 30 }; }
+  function lastChancePrev() { return { lastchance2: 'lastchance1', lastchance3: 'lastchance2', lastchance4: 'lastchance3' }; }
+  function lastChanceSeriesReady() {
+    return !!(isTournamentComplete('finale') && STATE.matchPlay && STATE.matchPlay.bracket
+      && STATE.matchPlay.bracket.f[0] && STATE.matchPlay.bracket.f[0].winner);
+  }
+  // Ranked, points-eligible-only Challenger Series standings — same
+  // filter/sort as the Challenger Series Standings tab itself.
+  function challengerStandingsRanked(upToKey) {
+    const { challenger } = computeStandings(undefined, upToKey);
+    return Object.entries(challenger)
+      .filter(([, pts]) => pts > 0)
+      .map(([name, pts]) => ({ name, country: NAME_INDEX.get(name), points: pts }))
+      .sort((a, b) => b.points - a.points || compareBySurname(a.name, b.name));
+  }
+  // Stage 1's 60: the bottom 30 of the Championship roster (91st-120th,
+  // "at risk" of relegation) + the 20 Challenger Series players immediately
+  // below the top 25 that get auto-promoted between seasons. The user's
+  // spec said Challenger ranks "21st-40th", but that overlaps the top-25
+  // promotion group by 5 spots — shifted up to 26th-45th here so a
+  // top-25 finisher never has to fight through the Last Chance Series for
+  // a roster spot they've already secured outright. Topped up with fresh
+  // prospects (and, if the Challenger contingent comes up short of 20,
+  // extra Korn Ferry Tour-tagged ones) so the field is always exactly 60.
+  function buildLastChanceStage1Field() {
+    const { champ } = computeStandings();
+    const rosterRanked = STATE.currentRoster.slice()
+      .sort((a, b) => (champ[b.name] || 0) - (champ[a.name] || 0) || compareBySurname(a.name, b.name));
+    const atRisk = rosterRanked.slice(90, 120);
+    const challengerContingent = challengerStandingsRanked().slice(25, 45)
+      .map(r => ALL_PLAYERS_BY_NAME.get(r.name) || { name: r.name, country: r.country, tag: 'tour' });
+    const internationalCount = 2 + Math.floor(Math.random() * 4); // 2-5 of the 10
+    const prospects = generateProspectGolfers(10, internationalCount)
+      .map((p, i) => ({ name: p.name, country: p.country, tag: i < 4 ? 'PGA Tour U' : 'Korn Ferry Tour' }));
+    let field = [...atRisk, ...challengerContingent, ...prospects];
+    if (field.length < 60) {
+      const extra = generateProspectGolfers(60 - field.length, 0).map(p => ({ name: p.name, country: p.country, tag: 'Korn Ferry Tour' }));
+      field = field.concat(extra);
+    }
+    return field;
+  }
+  // Builds (once) and persists each Last Chance stage's field the moment
+  // it's ready — Stage 1 once the season's other business is fully
+  // decided, each later stage once the one before it is complete. Reuses
+  // STATE.majorFields as the same generic per-key field cache the majors
+  // use, so a stage's field rehydrates across a reload exactly the same way.
+  function ensureLastChanceFields() {
+    let changed = false;
+    lastChanceKeys().forEach(tKey => {
+      const t = byKey[tKey];
+      if (!t) return;
+      if (STATE.majorFields[tKey]) {
+        if (!t.field || t.field.length === 0) {
+          const saved = STATE.majorFields[tKey];
+          t.field = saved.field;
+          t.startOrder = saved.startOrder;
+          saved.field.forEach(p => NAME_INDEX.set(p.name, p.country));
+        }
+        return;
+      }
+      if (t.field && t.field.length > 0) return; // already built this session
+      const prevKey = lastChancePrev()[tKey];
+      let field;
+      if (!prevKey) {
+        if (!lastChanceSeriesReady()) return;
+        field = buildLastChanceStage1Field();
+      } else {
+        if (!isTournamentComplete(prevKey)) return;
+        const prevStd = tournamentStandingsRows(prevKey);
+        if (!prevStd) return;
+        field = prevStd.ranked.slice(0, lastChanceSizes()[tKey]).map(r => r.p);
+      }
+      const orderedField = field.map(p => ({ name: p.name, country: p.country, tag: p.tag || 'tour' }));
+      const startOrder = shuffledClient(orderedField).map(p => p.name);
+      t.field = orderedField;
+      t.startOrder = startOrder;
+      orderedField.forEach(p => NAME_INDEX.set(p.name, p.country));
+      STATE.majorFields[tKey] = { field: orderedField, startOrder };
+      changed = true;
+    });
+    if (changed) saveState();
+    return changed;
+  }
+
+  // ---------------- season transition ----------------
+  // Promotion/relegation, before any age check: the top 90 of the current
+  // roster keep their spot outright; the 5 Last Chance Series Final
+  // finishers and the top 25 in the Challenger Series are promoted in;
+  // everyone else who was in this season's Last Chance field, plus
+  // whoever's left of the Challenger Series/depth pool, plus a batch of
+  // fresh prospects, make up next season's depth pool. Always resolves to
+  // exactly 90 + 5 + 25 = 120 on the roster, regardless of which of the 30
+  // at-risk players the 5 Last Chance qualifiers actually turn out to be.
+  function canAdvanceToNextSeason() {
+    return isTournamentLocked('lastchance4');
+  }
+  function computeSeasonTransition() {
+    const { champ } = computeStandings();
+    const rosterRanked = STATE.currentRoster.slice()
+      .sort((a, b) => (champ[b.name] || 0) - (champ[a.name] || 0) || compareBySurname(a.name, b.name));
+    const safe = rosterRanked.slice(0, 90);
+    const atRisk = rosterRanked.slice(90, 120);
+    const challengerRanked = challengerStandingsRanked();
+    const promotedChallenger = challengerRanked.slice(0, 25)
+      .map(r => ALL_PLAYERS_BY_NAME.get(r.name) || { name: r.name, country: r.country, tag: 'tour' });
+    const lc4 = tournamentStandingsRows('lastchance4');
+    const lcQualifiers = lc4 ? lc4.ranked.slice(0, 5).map(r => r.p) : [];
+
+    const newRoster = [...safe, ...lcQualifiers, ...promotedChallenger];
+    const newRosterNames = new Set(newRoster.map(p => p.name));
+
+    // Next season's depth pool, deduped by name: the whole Last Chance
+    // field minus its 5 promotions (this alone covers relegated roster
+    // players, non-promoted Challenger contingent, and non-qualifying
+    // prospects), plus whatever's left of this season's depth pool that
+    // never touched the Last Chance Series at all, plus fresh prospects.
+    const depthMap = new Map();
+    (byKey.lastchance1.field || []).forEach(p => { if (!newRosterNames.has(p.name)) depthMap.set(p.name, p); });
+    STATE.currentDepthPool.forEach(p => { if (!newRosterNames.has(p.name) && !depthMap.has(p.name)) depthMap.set(p.name, p); });
+    const freshProspectCount = 10 + Math.floor(Math.random() * 11); // 10-20
+    const freshProspects = generateProspectGolfers(freshProspectCount, Math.round(freshProspectCount * 0.3))
+      .map(p => ({ name: p.name, country: p.country, tag: 'tour' }));
+    freshProspects.forEach(p => depthMap.set(p.name, p));
+
+    return {
+      newRoster,
+      newDepthPool: Array.from(depthMap.values()),
+      relegated: atRisk.filter(p => !newRosterNames.has(p.name)),
+      promotedFromLastChance: lcQualifiers,
+      promotedFromChallenger: promotedChallenger,
+      freshProspects,
+    };
+  }
+  // Any player turning 50 or older in `newSeasonYear` is pulled out of the
+  // system immediately, even off the Championship roster — a roster spot
+  // lost this way is automatically backfilled by the best-available depth
+  // pool player by this season's Challenger Series standing (not already
+  // promoted in this same transition); a depth pool spot lost this way is
+  // backfilled 1-for-1 by a fresh prospect instead.
+  function applyAgeRelegation(newRoster, newDepthPool, newSeasonYear) {
+    let roster = newRoster.slice();
+    let depthPool = newDepthPool.slice();
+    const agedOut = [];
+    roster = roster.filter(p => {
+      if (getPlayerAge(p.name, newSeasonYear) < 50) return true;
+      agedOut.push(p);
+      return false;
+    });
+    const rosterShortfall = newRoster.length - roster.length;
+    depthPool = depthPool.filter(p => {
+      if (getPlayerAge(p.name, newSeasonYear) < 50) return true;
+      agedOut.push(p);
+      return false;
+    });
+    if (rosterShortfall > 0) {
+      const challengerOrder = challengerStandingsRanked().map(r => r.name);
+      const rank = new Map(challengerOrder.map((n, i) => [n, i]));
+      depthPool.sort((a, b) => (rank.has(a.name) ? rank.get(a.name) : Infinity) - (rank.has(b.name) ? rank.get(b.name) : Infinity));
+      for (let i = 0; i < rosterShortfall; i++) {
+        const backfill = depthPool.shift();
+        if (backfill) roster.push(backfill);
+        else {
+          const [fresh] = generateProspectGolfers(1, 0);
+          roster.push({ name: fresh.name, country: fresh.country, tag: 'tour' });
+        }
+      }
+    }
+    // Every depth-pool spot actually lost to age (not the ones just
+    // borrowed above to backfill the roster) gets replaced 1-for-1 by a
+    // random fresh prospect.
+    const depthAgedOutCount = agedOut.length - rosterShortfall;
+    for (let i = 0; i < depthAgedOutCount; i++) {
+      const [fresh] = generateProspectGolfers(1, 0);
+      depthPool.push({ name: fresh.name, country: fresh.country, tag: 'tour' });
+    }
+    return { roster, depthPool, agedOut };
+  }
+  // Orchestrates an entire season rollover: promotion/relegation, age-based
+  // relegation, carrying forward World Ranking baselines, resetting every
+  // season-scoped piece of state, and rolling the calendar forward a real
+  // year — season 2 plays out as 2029, season 3 as 2030, and so on.
+  function advanceToNextSeason() {
+    if (!canAdvanceToNextSeason()) return false;
+    const { owgr } = computeStandings(); // final World Ranking averages, captured before anything resets
+    const transition = computeSeasonTransition();
+    const newSeasonYear = STATE.seasonYear + 1;
+    const { roster, depthPool, agedOut } = applyAgeRelegation(transition.newRoster, transition.newDepthPool, newSeasonYear);
+
+    // Carry forward a real World Ranking baseline for every continuing
+    // player; a brand-new one (promoted-in prospect, age-relegation
+    // backfill, fresh depth-pool addition) starts at a fresh, low baseline
+    // instead — the same low-end spread the real player pool starts at.
+    [...roster, ...depthPool].forEach(p => {
+      STATE.seasonStartingOwgr[p.name] = (p.name in owgr) ? owgr[p.name] : Math.round((0.03 + Math.random() * 0.25) * 10000) / 10000;
+      DATA.startingOwgr[p.name] = STATE.seasonStartingOwgr[p.name];
+    });
+
+    STATE.lastSeasonSummary = {
+      season: STATE.seasonNumber, year: STATE.seasonYear,
+      relegated: transition.relegated.map(p => p.name),
+      promotedFromLastChance: transition.promotedFromLastChance.map(p => p.name),
+      promotedFromChallenger: transition.promotedFromChallenger.map(p => p.name),
+      freshProspects: transition.freshProspects.map(p => p.name),
+      agedOut: agedOut.map(p => `${p.name} (${getPlayerAge(p.name, newSeasonYear)})`),
+    };
+
+    STATE.currentRoster = fieldOut(roster);
+    // Sequential rank, same convention DATA.backgroundPool ships with —
+    // ordered by the live World Ranking baseline just captured/seeded above.
+    STATE.currentDepthPool = depthPool.slice()
+      .sort((a, b) => (STATE.seasonStartingOwgr[b.name] || 0) - (STATE.seasonStartingOwgr[a.name] || 0))
+      .map((p, i) => ({ name: p.name, country: p.country, tag: p.tag || 'tour', rank: 121 + i }));
+
+    // Reset every season-scoped piece of state.
+    STATE.scores = {};
+    STATE.roundLocked = {};
+    STATE.roundSelections = { r1: null, r2: null, r3: null, r4: null };
+    STATE.challengerLog = [];
+    STATE.challengerResults = [];
+    STATE.challengerRefreshed = [];
+    STATE.challengerRefreshCounts = {};
+    STATE.completionLog = [];
+    STATE.majorFields = {};
+    STATE.matchPlay = null;
+    STATE.playoffs = {};
+
+    STATE.seasonNumber += 1;
+    STATE.seasonYear = newSeasonYear;
+
+    // Every dynamically-built field (majors, Finale, Last Chance) has to be
+    // rebuilt from scratch for the new season — clear it so
+    // ensureMajorFields/ensureLastChanceFields treat it as never-built,
+    // same as a fresh load.
+    Object.keys(MAJOR_FIELD_BUILDERS).forEach(k => { const t = byKey[k]; if (t) t.field = []; });
+    lastChanceKeys().forEach(k => { const t = byKey[k]; if (t) t.field = []; });
+
+    applyCurrentRosterToChampFields();
+    refreshAllPlayers();
+    STATE.currentRoster.forEach(p => NAME_INDEX.set(p.name, p.country));
+    STATE.currentDepthPool.forEach(p => NAME_INDEX.set(p.name, p.country));
+
+    saveState();
+    return true;
+  }
+
   // ---------------- TOUR Championship: Group Stage + Knockout ----------------
   // Not stroke play at all — a 32-man match-play bracket seeded off the live
   // Championship Series standings the moment the Finale is confirmed
@@ -625,6 +1020,7 @@
   ensureMajorFields();
     ensureMatchPlay();
     ensureKnockoutBracket();
+    ensureLastChanceFields();
 
   function pointsForRank(anchors, rank) {
     if (rank < anchors[0][0]) return anchors[0][1];
@@ -729,6 +1125,7 @@
   // name -> points for players who have at least one round in and made the
   // cut (missed-cut players are handled by the caller, who knows they're 0).
   function tournamentWrPoints(tKey, t, cut) {
+    if (t.group === 'lastchance') return new Map(); // never earns World Ranking points
     const owgrTable = t.group === 'champ' ? DATA.pointTables.owgrRegular : DATA.pointTables.owgrMajor;
     const rowsForPts = t.field.map(p => {
       if (cut && cut.missedCut.has(p.name)) return null;
@@ -872,6 +1269,7 @@
     ensureMajorFields();
     ensureMatchPlay();
     ensureKnockoutBracket();
+    ensureLastChanceFields();
   }
   // Wipes a tournament back to unplayed — scores, round locks, and its
   // Challenger Series companion event (if one has auto-run off it) — so a
@@ -953,7 +1351,7 @@
   // yet be initialized.
   function guaranteedChallengerPlayers() {
     const names = pastChallengerWinners();
-    names.add('Will Zalatoris');
+    if (STATE.seasonNumber === 1) names.add('Will Zalatoris'); // season 1 only, per request
     return names;
   }
   // The depth pool re-ordered by a blend of its fixed rank and the CURRENT
@@ -963,12 +1361,12 @@
   // instead of the raw pool is what makes the draw skew toward this
   // season's Challenger leaders as more events play out.
   function challengerBlendedOrder(t) {
-    if (t <= 0) return DATA.backgroundPool;
+    if (t <= 0) return STATE.currentDepthPool;
     const { challenger } = computeStandings();
-    const byChallengerPts = DATA.backgroundPool.slice().sort((a, b) => (challenger[b.name] || 0) - (challenger[a.name] || 0));
+    const byChallengerPts = STATE.currentDepthPool.slice().sort((a, b) => (challenger[b.name] || 0) - (challenger[a.name] || 0));
     const standingsRank = new Map(byChallengerPts.map((p, i) => [p.name, i + 1]));
-    const depthRank = new Map(DATA.backgroundPool.map((p, i) => [p.name, i + 1]));
-    return DATA.backgroundPool.slice().sort((a, b) => {
+    const depthRank = new Map(STATE.currentDepthPool.map((p, i) => [p.name, i + 1]));
+    return STATE.currentDepthPool.slice().sort((a, b) => {
       const ea = (1 - t) * depthRank.get(a.name) + t * standingsRank.get(a.name);
       const eb = (1 - t) * depthRank.get(b.name) + t * standingsRank.get(b.name);
       return ea - eb;
@@ -1014,7 +1412,7 @@
   // finish order is a weighted random draw.
   function runChallengerFinale(trigger) {
     const { challenger } = computeStandings();
-    const field = DATA.backgroundPool.slice()
+    const field = STATE.currentDepthPool.slice()
       .sort((a, b) => (challenger[b.name] || 0) - (challenger[a.name] || 0) || a.rank - b.rank)
       .slice(0, 90);
     const order = weightedSample(field, field.length, Math.random);
@@ -1095,6 +1493,7 @@
     const champ = {};
     DATA.tournaments.forEach(t => {
       if (t.key === excludeKey) return;
+      if (t.group === 'lastchance') return; // never feeds this season's points
       if (!withinScope(t.key)) return;
       const sc = STATE.scores[t.key];
       if (!sc) return;
@@ -1131,7 +1530,7 @@
     Object.entries(owgrTotal).forEach(([name, total]) => { owgrAvg[name] = total / OWGR_DIVISOR; });
     return { owgr: owgrAvg, champ, challenger };
   }
-  const GROUP_LABEL = { champ: 'Championship Series', players: 'THE PLAYERS', major: 'Major' };
+  const GROUP_LABEL = { champ: 'Championship Series', players: 'THE PLAYERS', major: 'Major', lastchance: 'Last Chance Series' };
 
   function fmtToPar(n) {
     if (n === null || n === undefined || Number.isNaN(n)) return null;
@@ -1347,7 +1746,7 @@
     // for (its Leaderboard tab explains what still needs to be locked in
     // first) — and the Group Stage / Knockout aren't stroke play at all, so
     // they never belong here regardless.
-    const groups = ['champ', 'players', 'major'].map(g => ({
+    const groups = ['champ', 'players', 'major', 'lastchance'].map(g => ({
       label: GROUP_LABEL[g],
       items: DATA.tournaments.filter(t => t.group === g && !MATCH_PLAY_KEYS.has(t.key) && fieldIsReady(t.key)).map(t => ({ value: t.key, label: t.name })),
     })).filter(g => g.items.length > 0);
@@ -1541,6 +1940,7 @@
           ensureMajorFields();
     ensureMatchPlay();
     ensureKnockoutBracket();
+    ensureLastChanceFields();
           draw();
           if (currentView === 'lb-' + tKey) renderLeaderboard(tKey);
         });
@@ -1631,12 +2031,31 @@
   }
 
   // ---------------- leaderboard view ----------------
+  // A season-turn recap — who got promoted, relegated, or aged out — shown
+  // on the Last Chance Series Final tab once its field is cleared out again
+  // for the new season (i.e. right after the transition that produced it).
+  function renderSeasonRecapHtml() {
+    const s = STATE.lastSeasonSummary;
+    if (!s) return '';
+    const list = (arr) => arr.length ? `<ul>${arr.map(n => `<li>${n}</li>`).join('')}</ul>` : '<p class="dash">None.</p>';
+    return `<div class="playoff-box" style="margin-top:14px;">
+      <h3>Season ${s.season} (${s.year}) recap</h3>
+      <p class="view-note">What happened at the turn of the season, before ${s.year + 1} got underway.</p>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px;">
+        <div><strong>Promoted &mdash; Last Chance Series (${s.promotedFromLastChance.length})</strong>${list(s.promotedFromLastChance)}</div>
+        <div><strong>Promoted &mdash; Challenger Series (${s.promotedFromChallenger.length})</strong>${list(s.promotedFromChallenger)}</div>
+        <div><strong>Relegated off the roster (${s.relegated.length})</strong>${list(s.relegated)}</div>
+        <div><strong>Aged out at 50+ (${s.agedOut.length})</strong><p class="view-note" style="margin:0 0 6px;">Ages here are a simulation-only mechanic, randomly assigned per name for this relegation rule &mdash; not real ages.</p>${list(s.agedOut)}</div>
+        <div><strong>New prospects joining the pool (${s.freshProspects.length})</strong>${list(s.freshProspects)}</div>
+      </div>
+    </div>`;
+  }
   function renderLeaderboard(tKey) {
     const el = viewContainer('lb-' + tKey);
     const t = byKey[tKey];
     if (!t.field || t.field.length === 0) {
       el.innerHTML = `<div class="view-head"><h2>${t.name}</h2><div class="meta">${t.dates}</div></div>
-        <p class="view-note">${fieldPendingNote(tKey)}</p>`;
+        <p class="view-note">${fieldPendingNote(tKey)}</p>${tKey === 'lastchance4' ? renderSeasonRecapHtml() : ''}`;
       return;
     }
     const cut = computeCut(tKey);
@@ -1698,17 +2117,24 @@
     });
 
     let sortMode = 'score';
-    el.innerHTML = `<div class="view-head"><h2>${t.name}</h2><div class="meta">${t.dates}<br/>field of ${t.field.length} &middot; cut: top ${t.cutSize || 65} &amp; ties</div></div>`;
+    const isLastChance = t.group === 'lastchance';
+    const cutMeta = isLastChance ? 'no 36-hole cut — every player finishes' : `cut: top ${t.cutSize || 65} &amp; ties`;
+    el.innerHTML = `<div class="view-head"><h2>${t.name}</h2><div class="meta">${t.dates}<br/>field of ${t.field.length} &middot; ${cutMeta}</div></div>`;
     const controlRow = document.createElement('div');
     controlRow.className = 'lock-row';
     controlRow.style.marginBottom = '10px';
     el.appendChild(controlRow);
-    el.insertAdjacentHTML('beforeend', `<p class="view-note">Live down to the hole — a score updates the instant it's typed into Round 1&ndash;4, even mid-round. Click "Pos." to sort by score, or a round header (R1&ndash;R4) to sort by that round, with ties shown as "T". Players outside the cut line score 0 toward the Championship Series and World Ranking. The Move column shows how a player's position changed once the most recently locked round was submitted, versus the round before it. WR pts is how many World Ranking points that finish is worth right now, tie-shared the same way the World Ranking tab totals them.</p>`);
+    const pointsNote = isLastChance
+      ? 'This result never earns Championship Series or World Ranking points — the only thing on the line is advancing to the next stage (or, in the Final, promotion to next season\'s Championship Series roster).'
+      : 'Players outside the cut line score 0 toward the Championship Series and World Ranking. WR pts is how many World Ranking points that finish is worth right now, tie-shared the same way the World Ranking tab totals them.';
+    el.insertAdjacentHTML('beforeend', `<p class="view-note">Live down to the hole — a score updates the instant it's typed into Round 1&ndash;4, even mid-round. Click "Pos." to sort by score, or a round header (R1&ndash;R4) to sort by that round, with ties shown as "T". ${pointsNote} The Move column shows how a player's position changed once the most recently locked round was submitted, versus the round before it.</p>`);
     el.insertAdjacentHTML('beforeend', fieldMakeupNote(t));
     const tableHost = document.createElement('div');
     el.appendChild(tableHost);
     const playoffHost = document.createElement('div');
     el.appendChild(playoffHost);
+    const seasonHost = document.createElement('div');
+    el.appendChild(seasonHost);
 
     function drawControls() {
       controlRow.innerHTML = '';
@@ -1833,9 +2259,31 @@
       playoffHost.appendChild(box);
     }
 
+    function drawSeasonTransition() {
+      seasonHost.innerHTML = '';
+      if (tKey !== 'lastchance4' || !isTournamentLocked(tKey)) return;
+      const preview = computeSeasonTransition();
+      const box = document.createElement('div');
+      box.className = 'playoff-box';
+      box.innerHTML = `<h3>&#127942; Season ${STATE.seasonNumber} (${STATE.seasonYear}) complete</h3>
+        <p class="view-note">Advancing rolls the calendar to <strong>${STATE.seasonYear + 1}</strong>: ${preview.relegated.length} relegated off the Championship roster, ${preview.promotedFromLastChance.length} promoted via the Last Chance Series Final, ${preview.promotedFromChallenger.length} promoted from the Challenger Series standings, plus a fresh batch of prospects joining the depth pool. Any player turning 50 or older in ${STATE.seasonYear + 1} is relegated out of the system entirely, regardless of where they finished &mdash; using a randomly assigned, simulation-only age for this rule, not a real one.</p>`;
+      const btn = document.createElement('button');
+      btn.className = 'btn primary';
+      btn.textContent = `Advance to Season ${STATE.seasonYear + 1}`;
+      btn.addEventListener('click', () => {
+        if (!confirm(`Advance to Season ${STATE.seasonYear + 1}? This resets every score, lock, and Challenger Series result for the new season and cannot be undone.`)) return;
+        advanceToNextSeason();
+        updateSeasonHeader();
+        selectView('champpoints');
+      });
+      box.appendChild(btn);
+      seasonHost.appendChild(box);
+    }
+
     function draw() {
       drawControls();
       drawPlayoff();
+      drawSeasonTransition();
       const sorted = rows.slice();
       const roundMatch = /^r([1-4])$/.exec(sortMode);
       if (sortMode === 'score') {
@@ -2082,6 +2530,7 @@
     const wins = {}, top10 = {}, missedCuts = {};
     DATA.tournaments.forEach(t => {
       if (MATCH_PLAY_KEYS.has(t.key)) return;
+      if (t.group === 'lastchance') return; // never feeds this season's Wins/Top10/Missed Cuts
       if (!isTournamentComplete(t.key)) return;
       const cut = computeCut(t.key);
       if (cut) cut.missedCut.forEach(name => { missedCuts[name] = (missedCuts[name] || 0) + 1; });
@@ -2145,8 +2594,11 @@
     assignPositions(ranked);
     const owgrTable = t.group === 'champ' ? DATA.pointTables.owgrRegular : DATA.pointTables.owgrMajor;
     const champTable = t.group === 'champ' ? DATA.pointTables.champSignature : DATA.pointTables.champMajor;
-    const owgrPts = pointsWithTies(ranked, owgrTable);
-    const champPts = pointsWithTies(ranked, champTable);
+    // Last Chance Series results never earn World Ranking/Championship
+    // Series points, same as they're excluded from computeStandings.
+    const pointsEligible = t.group !== 'lastchance';
+    const owgrPts = pointsEligible ? pointsWithTies(ranked, owgrTable) : ranked.map(() => 0);
+    const champPts = pointsEligible ? pointsWithTies(ranked, champTable) : ranked.map(() => 0);
     ranked.forEach((r, i) => { r.wrPts = owgrPts[i]; r.champPts = champPts[i]; });
     return { cut, ranked };
   }
@@ -2302,7 +2754,7 @@
     const el = viewContainer('challengertournament');
     const results = STATE.challengerResults;
     el.innerHTML = `<div class="view-head"><h2>Challenger Series Tournament</h2><div class="meta">${results.length} event${results.length === 1 ? '' : 's'} run</div></div>
-      <p class="view-note">Every time a Championship Series event finishes (round 1 cut through round 4), a companion Challenger Series event auto-runs here — a randomised, weighted result drawn from the real 121+ depth pool, ranks 121&ndash;${120 + DATA.backgroundPool.length}. Field size varies 120&ndash;140 each time, skewing more toward the current Challenger Series leaders as the season goes on, and anyone who's already won a Challenger Series event this season is guaranteed a spot in every one after. Will Zalatoris is guaranteed a spot in every regular Challenger Series event this season too, though not the Finale (whose top-90 field stays purely standings-based) — a guaranteed start, not an edge in how he does once he's in it, since the finish-order draw still weighs him the same as everyone else. It has no effect on the Championship Series board; it feeds the Challenger Series Standings tab at full value and the World Ranking at half value. Each event can be re-rolled up to twice with "Refresh" below it. The Championship Series Finale triggers its own Challenger Series Finale — field is exactly the top 90 on the Challenger Series standings at that point, no random draw for who's in it.</p>`;
+      <p class="view-note">Every time a Championship Series event finishes (round 1 cut through round 4), a companion Challenger Series event auto-runs here — a randomised, weighted result drawn from the real 121+ depth pool, ranks 121&ndash;${120 + STATE.currentDepthPool.length}. Field size varies 120&ndash;140 each time, skewing more toward the current Challenger Series leaders as the season goes on, and anyone who's already won a Challenger Series event this season is guaranteed a spot in every one after. Will Zalatoris is guaranteed a spot in every regular Challenger Series event this season too, though not the Finale (whose top-90 field stays purely standings-based) — a guaranteed start, not an edge in how he does once he's in it, since the finish-order draw still weighs him the same as everyone else. It has no effect on the Championship Series board; it feeds the Challenger Series Standings tab at full value and the World Ranking at half value. Each event can be re-rolled up to twice with "Refresh" below it. The Championship Series Finale triggers its own Challenger Series Finale — field is exactly the top 90 on the Challenger Series standings at that point, no random draw for who's in it.</p>`;
     if (!results.length) {
       el.innerHTML += '<p class="view-note">Nothing yet — complete a Championship Series event (all rounds, cut included) in Round 1&ndash;4 to trigger the first one.</p>';
       return;
@@ -2372,15 +2824,15 @@
   }
   function renderReference() {
     const el = viewContainer('reference');
-    el.innerHTML = `<div class="view-head"><h2>Depth Pool</h2><div class="meta">${DATA.backgroundPool.length} real players</div></div>
-      <p class="view-note">The fixed 120 (see any Championship Series tab, or World Ranking) play every Championship Series event. Everyone here — real Korn Ferry Tour / DP World Tour players, ranked 121&ndash;${120 + DATA.backgroundPool.length} — is the open pool that Challenger Series and DP World Tour weeks draw from. It's not a closed roster: each week samples a different weighted subset, favoring the top of the pool but reaching into the tail for real variation.</p>
+    el.innerHTML = `<div class="view-head"><h2>Depth Pool</h2><div class="meta">${STATE.currentDepthPool.length} real players</div></div>
+      <p class="view-note">The fixed 120 (see any Championship Series tab, or World Ranking) play every Championship Series event. Everyone here — real Korn Ferry Tour / DP World Tour players (plus any simulation-generated prospects who've joined since) ranked 121&ndash;${120 + STATE.currentDepthPool.length} — is the open pool that Challenger Series and DP World Tour weeks draw from. It's not a closed roster: each week samples a different weighted subset, favoring the top of the pool but reaching into the tail for real variation.</p>
       <div class="chips"><button class="btn primary" id="resample-btn">Simulate this week's field</button><span class="chip" id="resample-count"></span></div>
       <div class="table-wrap" style="max-height:520px;"><table><thead><tr><th>Rank</th><th>Player</th><th>Ctry</th><th>This week?</th></tr></thead><tbody id="pool-body"></tbody></table></div>`;
     let sampledSet = new Set();
     const poolBody = el.querySelector('#pool-body');
     function drawPool() {
       poolBody.innerHTML = '';
-      DATA.backgroundPool.forEach(p => {
+      STATE.currentDepthPool.forEach(p => {
         const tr = document.createElement('tr');
         const inField = sampledSet.has(p.name);
         tr.innerHTML = `<td class="rk mono">${p.rank}</td><td class="name">${p.name}</td><td class="ctry">${p.country}</td><td class="num">${inField ? '<span class="chip" style="border-color:var(--accent);color:var(--accent-strong);">In field</span>' : '<span class="dash">–</span>'}</td>`;
@@ -2390,7 +2842,7 @@
     drawPool();
     el.querySelector('#resample-btn').addEventListener('click', () => {
       const size = 90 + Math.floor(Math.random() * 40);
-      const sample = weightedSample(DATA.backgroundPool, size, Math.random);
+      const sample = weightedSample(STATE.currentDepthPool, size, Math.random);
       sampledSet = new Set(sample.map(p => p.name));
       el.querySelector('#resample-count').textContent = `${size}-man sample`;
       drawPool();
@@ -2476,12 +2928,26 @@
       }
       if (!confirm('Restore this backup? This replaces everything currently entered in this browser and cannot be undone.')) return;
       STATE = Object.assign(defaultState(), parsed);
+      // The restored backup may carry a different roster/depth pool (e.g. a
+      // later season) than whatever this session already built — repoint
+      // every champ-group field at it, and force every dynamically-built
+      // field (majors, Finale, Last Chance) to rehydrate from the backup's
+      // own cache instead of keeping what this session had built before
+      // the restore.
+      applyCurrentRosterToChampFields();
+      refreshAllPlayers();
+      STATE.currentRoster.forEach(p => NAME_INDEX.set(p.name, p.country));
+      STATE.currentDepthPool.forEach(p => NAME_INDEX.set(p.name, p.country));
+      Object.keys(MAJOR_FIELD_BUILDERS).forEach(k => { const t = byKey[k]; if (t) t.field = []; });
+      lastChanceKeys().forEach(k => { const t = byKey[k]; if (t) t.field = []; });
+      updateSeasonHeader();
       saveState();
       checkChallengerTriggers();
       checkCompletionLog();
       ensureMajorFields();
     ensureMatchPlay();
     ensureKnockoutBracket();
+    ensureLastChanceFields();
       refreshExport();
       importStatus.textContent = 'Backup restored.';
     });

@@ -2,7 +2,7 @@
 const fs = require('fs');
 const path = require('path');
 const { makeRng, buildWorld, TOP_120 } = require('./sim');
-const { RANK_121_200, REAL_EXTRA, PAST_CHAMPIONS, NAME_BANK } = require('./data/players');
+const { RANK_121_200, REAL_EXTRA, PAST_CHAMPIONS, NAME_BANK, REAL_BIRTH_YEARS } = require('./data/players');
 const {
   pointsWithTies, owgrTableFor, champTableFor, simulateRoundHoles, cutSizeFor,
   OWGR_MAJOR, OWGR_REGULAR, CHAMP_REGULAR, CHAMP_SIGNATURE, CHAMP_MAJOR,
@@ -184,6 +184,7 @@ const appData = {
   // standings instead, computed client-side when it's actually needed.
   pastChampions: PAST_CHAMPIONS,
   clubProNames: NAME_BANK,
+  realBirthYears: REAL_BIRTH_YEARS,
 };
 
 fs.writeFileSync(path.join(__dirname, 'output', 'app-data.json'), JSON.stringify(appData));

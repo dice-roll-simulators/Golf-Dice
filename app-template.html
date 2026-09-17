@@ -238,7 +238,7 @@
       // Championship roster / depth pool, since DATA itself is immutable
       // static JSON and can't carry a promoted/relegated roster across seasons.
       seasonNumber: 1, seasonYear: null, currentRoster: null, currentDepthPool: null,
-      playerBirthYears: {}, lastSeasonSummary: null, seasonStartingOwgr: {},
+      playerBirthYears: {}, lastSeasonSummary: null, seasonStartingOwgr: {}, seasonHistory: [],
     };
   }
   let STATE = defaultState();
@@ -356,16 +356,16 @@
   function prospectNamePools() {
     return {
       USA: {
-        first: ['Jake', 'Tyler', 'Cameron', 'Austin', 'Hunter', 'Colton', 'Brody', 'Dawson', 'Chase', 'Trevor', 'Brooks', 'Garrett', 'Mason', 'Wyatt', 'Cole', 'Blake', 'Tanner', 'Grant', 'Logan', 'Parker'],
-        last: ['Whitfield', 'Hargrove', 'Callahan', 'Prescott', 'Radford', 'Duncan', 'Ellison', 'Tatum', 'Winslow', 'Kirkland', 'Ashby', 'Merritt', 'Sawyer', 'Thorne', 'Holloway', 'Lassiter', 'Crenshaw', 'Tolbert', 'Nash', 'Griggs'],
+        first: ['Jake', 'Tyler', 'Cameron', 'Austin', 'Hunter', 'Colton', 'Brody', 'Dawson', 'Chase', 'Trevor', 'Brooks', 'Garrett', 'Mason', 'Wyatt', 'Cole', 'Blake', 'Tanner', 'Grant', 'Logan', 'Parker', 'Dalton', 'Bryce', 'Cody', 'Shane', 'Trent', 'Wesley', 'Nolan', 'Caleb', 'Drew', 'Reid', 'Clayton', 'Gavin', 'Landon', 'Marshall', 'Spencer', 'Tucker', 'Weston', 'Beau', 'Holt', 'Quinn'],
+        last: ['Whitfield', 'Hargrove', 'Callahan', 'Prescott', 'Radford', 'Duncan', 'Ellison', 'Tatum', 'Winslow', 'Kirkland', 'Ashby', 'Merritt', 'Sawyer', 'Thorne', 'Holloway', 'Lassiter', 'Crenshaw', 'Tolbert', 'Nash', 'Griggs', 'Beckett', 'Calloway', 'Driscoll', 'Emerson', 'Fairbanks', 'Gallman', 'Hutchings', 'Ingraham', 'Jernigan', 'Kingsley', 'Lockwood', 'Marchetti', 'Nesbitt', 'Overby', 'Pemberton', 'Quimby', 'Rutledge', 'Seaver', 'Trammell', 'Underhill', 'Vance', 'Wexford', 'Yancey', 'Blackwood', 'Cavendish', 'Dunmore', 'Estridge', 'Fenwick', 'Garrity', 'Halloran'],
         country: 'USA',
       },
-      ENG: { first: ['Oliver', 'Harry', 'George', 'Jack', 'Freddie', 'Charlie', 'Alfie', 'Archie', 'Toby', 'Finlay'], last: ['Pemberton', 'Ashcroft', 'Fairweather', 'Lowther', 'Whitmore', 'Dacre', 'Sherwin', 'Barlow', 'Tremaine', 'Eastwick'], country: 'ENG' },
-      SWE: { first: ['Erik', 'Anton', 'Viktor', 'Gustav', 'Oscar', 'Filip', 'Linus', 'Axel', 'Emil', 'Hugo'], last: ['Lindqvist', 'Bergstrom', 'Nilsson', 'Sandberg', 'Wahlgren', 'Holmqvist', 'Sjoberg', 'Ekstrom', 'Fransson', 'Lindgren'], country: 'SWE' },
-      KOR: { first: ['Min-jun', 'Seo-jun', 'Do-yun', 'Ji-ho', 'Tae-yang', 'Joon-ho', 'Hyun-woo', 'Sung-min', 'Woo-jin', 'Kang-min'], last: ['Kim', 'Lee', 'Park', 'Choi', 'Jung', 'Kang', 'Yoon', 'Lim', 'Han', 'Shin'], country: 'KOR' },
-      JPN: { first: ['Haruto', 'Sota', 'Ren', 'Yuto', 'Kaito', 'Riku', 'Sora', 'Yamato', 'Daiki', 'Hinata'], last: ['Watanabe', 'Kobayashi', 'Yamamoto', 'Nakamura', 'Ito', 'Saito', 'Matsumoto', 'Inoue', 'Kimura', 'Hayashi'], country: 'JPN' },
-      RSA: { first: ['Pieter', 'Jaco', 'Riaan', 'Dawie', 'Johan', 'Willem', 'Stefan', 'Heinrich', 'Andre', 'Marius'], last: ['Botha', 'Du Plessis', 'Van Wyk', 'Kruger', 'Nel', 'Pretorius', 'Fourie', 'Erasmus', 'Venter', 'Steyn'], country: 'RSA' },
-      AUS: { first: ['Lachlan', 'Riley', 'Jayden', 'Ky', 'Corey', 'Zach', 'Nathan', 'Brayden', 'Ethan', 'Hayden'], last: ['Ballantyne', 'Fenwick', 'Overton', 'Carrick', 'Blythe', 'Dunmore', 'Harkness', 'Speight', 'Colefax', 'Rutherglen'], country: 'AUS' },
+      ENG: { first: ['Oliver', 'Harry', 'George', 'Jack', 'Freddie', 'Charlie', 'Alfie', 'Archie', 'Toby', 'Finlay', 'Theo', 'Rupert', 'Miles', 'Hugo', 'Sebastian', 'Edmund', 'Nathaniel', 'Percy', 'Barnaby', 'Julian'], last: ['Pemberton', 'Ashcroft', 'Fairweather', 'Lowther', 'Whitmore', 'Dacre', 'Sherwin', 'Barlow', 'Tremaine', 'Eastwick', 'Gresham', 'Holbrook', 'Kingsford', 'Marlowe', 'Nettleton', 'Osgood', 'Pettigrew', 'Redcliffe', 'Stanmore', 'Wyndham'], country: 'ENG' },
+      SWE: { first: ['Erik', 'Anton', 'Viktor', 'Gustav', 'Oscar', 'Filip', 'Linus', 'Axel', 'Emil', 'Hugo', 'Albin', 'Melker', 'Isak', 'Vidar', 'Sixten', 'Elias', 'Loke', 'Alvin', 'Nils', 'Gunnar'], last: ['Lindqvist', 'Bergstrom', 'Nilsson', 'Sandberg', 'Wahlgren', 'Holmqvist', 'Sjoberg', 'Ekstrom', 'Fransson', 'Lindgren', 'Bystrom', 'Dahlgren', 'Engstrom', 'Falk', 'Gyllenhaal', 'Hedlund', 'Isaksson', 'Jonsson', 'Karlsson', 'Lundqvist'], country: 'SWE' },
+      KOR: { first: ['Min-jun', 'Seo-jun', 'Do-yun', 'Ji-ho', 'Tae-yang', 'Joon-ho', 'Hyun-woo', 'Sung-min', 'Woo-jin', 'Kang-min', 'Jae-won', 'Dong-hyun', 'Sung-ho', 'Yong-jun', 'Chang-min', 'Hyun-jun', 'Jin-woo', 'Seung-min', 'Tae-min', 'Woo-seok'], last: ['Kim', 'Lee', 'Park', 'Choi', 'Jung', 'Kang', 'Yoon', 'Lim', 'Han', 'Shin', 'Oh', 'Seo', 'Kwon', 'Hwang', 'Song', 'Ahn', 'Yoo', 'Bae', 'Cho', 'Nam'], country: 'KOR' },
+      JPN: { first: ['Haruto', 'Sota', 'Ren', 'Yuto', 'Kaito', 'Riku', 'Sora', 'Yamato', 'Daiki', 'Hinata', 'Sho', 'Kenta', 'Ryusei', 'Yuma', 'Kohei', 'Naoki', 'Shota', 'Taiga', 'Kaname', 'Ryota'], last: ['Watanabe', 'Kobayashi', 'Yamamoto', 'Nakamura', 'Ito', 'Saito', 'Matsumoto', 'Inoue', 'Kimura', 'Hayashi', 'Suzuki', 'Takahashi', 'Yoshida', 'Yamaguchi', 'Sasaki', 'Yamada', 'Shimizu', 'Mori', 'Ikeda', 'Hashimoto'], country: 'JPN' },
+      RSA: { first: ['Pieter', 'Jaco', 'Riaan', 'Dawie', 'Johan', 'Willem', 'Stefan', 'Heinrich', 'Andre', 'Marius', 'Hendrik', 'Cornelius', 'Francois', 'Gideon', 'Izak', 'Louwrens', 'Nico', 'Reinhardt', 'Tiaan', 'Werner'], last: ['Botha', 'Du Plessis', 'Van Wyk', 'Kruger', 'Nel', 'Pretorius', 'Fourie', 'Erasmus', 'Venter', 'Steyn', 'Coetzee', 'Els', 'Grobler', 'Joubert', 'Labuschagne', 'Marais', 'Naude', 'Oosthuizen', 'Prinsloo', 'Swanepoel'], country: 'RSA' },
+      AUS: { first: ['Lachlan', 'Riley', 'Jayden', 'Ky', 'Corey', 'Zach', 'Nathan', 'Brayden', 'Ethan', 'Hayden', 'Cooper', 'Flynn', 'Harrison', 'Jarrah', 'Kade', 'Levi', 'Mitchell', 'Noah', 'Rhys', 'Tate'], last: ['Ballantyne', 'Fenwick', 'Overton', 'Carrick', 'Blythe', 'Dunmore', 'Harkness', 'Speight', 'Colefax', 'Rutherglen', 'Ashdown', 'Braddock', 'Cathcart', 'Dunstan', 'Everleigh', 'Farraday', 'Grantham', 'Hawksley', 'Ingleby', 'Kestrel'], country: 'AUS' },
     };
   }
   // Draws `n` unique prospect names, `internationalCount` of them (rest
@@ -397,17 +397,15 @@
     return out;
   }
 
-  // ---------------- synthetic player-age system ----------------
-  // No real birth-year data exists (or is invented here) for the ~420 real,
-  // named professionals in this app — attaching a fabricated age to a real
-  // person's name is a real accuracy/reputational risk, so this is entirely
-  // a simulation-only mechanic layered on top for the age-based relegation
-  // rule, and every place it's shown in the UI says so explicitly. Each
-  // name is lazily assigned a birth year the first time it's looked up
-  // (skewed toward a golfer's prime, with a small tail reaching toward the
-  // 50+ threshold — deliberately kept thin, since every name in the
-  // 420-player universe gets assigned one in the very first season-ending
-  // age check, all at once), then persisted so it never changes again.
+  // ---------------- player-age system ----------------
+  // DATA.realBirthYears is a best-effort, public-record birth year table for
+  // real, named professionals (see data/players.js) — used directly when a
+  // name is in it. Real public data doesn't exist (or isn't reliably known)
+  // for every name in the ~420-player universe, so anyone genuinely unlisted
+  // (procedurally generated prospects, and lower-profile real names with no
+  // confident public record) falls back to a synthetic, simulation-only
+  // birth year instead of a guessed "real" one, lazily assigned the first
+  // time it's looked up and persisted so it never changes again.
   function assignBirthYear(referenceYear) {
     const r = Math.random();
     let age;
@@ -417,11 +415,15 @@
     return referenceYear - age;
   }
   function getPlayerBirthYear(name) {
+    if (DATA.realBirthYears && name in DATA.realBirthYears) return DATA.realBirthYears[name];
     if (!(name in STATE.playerBirthYears)) {
       STATE.playerBirthYears[name] = assignBirthYear(STATE.seasonYear);
       saveState();
     }
     return STATE.playerBirthYears[name];
+  }
+  function isRealBirthYear(name) {
+    return !!(DATA.realBirthYears && name in DATA.realBirthYears);
   }
   function getPlayerAge(name, asOfYear) {
     return asOfYear - getPlayerBirthYear(name);
@@ -739,6 +741,51 @@
     return changed;
   }
 
+  // ---------------- past results (season winners archive) ----------------
+  // One flat list of every event this season that has a determined winner
+  // so far — every champ/major/THE PLAYERS stroke-play event, the TOUR
+  // Championship Knockout, every Challenger Series event (regular +
+  // Finale), and any Last Chance Series stage that's been played out.
+  // Used live for the current, in-progress season, and snapshotted into
+  // STATE.seasonHistory the moment a season transition happens (since
+  // STATE.scores/challengerResults/matchPlay all get wiped for the new
+  // season right after).
+  function seasonWinnersSnapshot() {
+    const rows = [];
+    DATA.tournaments.forEach(t => {
+      if (t.key === 'matchgroup') return; // round-robin group stage has no single "winner"
+      if (t.key === 'matchko') {
+        const champion = STATE.matchPlay && STATE.matchPlay.bracket && STATE.matchPlay.bracket.f[0] && STATE.matchPlay.bracket.f[0].winner;
+        if (champion) rows.push({ key: t.key, name: t.name, dates: t.dates, category: 'Match Play', winner: champion, country: NAME_INDEX.get(champion) || '' });
+        return;
+      }
+      if (!t.field || !t.field.length) return;
+      if (!isTournamentComplete(t.key)) return;
+      const std = tournamentStandingsRows(t.key);
+      if (!std || !std.ranked.length) return;
+      const winner = std.ranked[0];
+      const categoryLabel = { champ: 'Championship Series', players: 'THE PLAYERS', major: 'Major', lastchance: 'Last Chance Series' }[t.group] || t.group;
+      rows.push({ key: t.key, name: t.name, dates: t.dates, category: categoryLabel, winner: winner.p.name, country: winner.p.country });
+    });
+    STATE.challengerResults.forEach(ev => {
+      const winnerResult = ev.result.find(r => r.rank === 1);
+      if (!winnerResult) return;
+      rows.push({ key: 'challenger-' + ev.triggerKey, name: ev.triggerName, dates: ev.dates, category: 'Challenger Series', winner: winnerResult.name, country: NAME_INDEX.get(winnerResult.name) || '' });
+    });
+    return rows;
+  }
+  // The years this app actually has results for: the current in-progress
+  // season plus every one archived in STATE.seasonHistory (capped at 50
+  // years back — see advanceToNextSeason).
+  function pastResultsYears() {
+    return [STATE.seasonYear, ...STATE.seasonHistory.map(h => h.year)];
+  }
+  function pastResultsRowsFor(year) {
+    if (year === STATE.seasonYear) return seasonWinnersSnapshot();
+    const entry = STATE.seasonHistory.find(h => h.year === year);
+    return entry ? entry.rows : [];
+  }
+
   // ---------------- season transition ----------------
   // Promotion/relegation, before any age check: the top 90 of the current
   // roster keep their spot outright; the 5 Last Chance Series Final
@@ -858,8 +905,13 @@
       promotedFromLastChance: transition.promotedFromLastChance.map(p => p.name),
       promotedFromChallenger: transition.promotedFromChallenger.map(p => p.name),
       freshProspects: transition.freshProspects.map(p => p.name),
-      agedOut: agedOut.map(p => `${p.name} (${getPlayerAge(p.name, newSeasonYear)})`),
+      agedOut: agedOut.map(p => `${p.name} (${getPlayerAge(p.name, newSeasonYear)}${isRealBirthYear(p.name) ? '' : '*'})`),
     };
+
+    // Archive this season's event winners before scores/results reset below
+    // — this is the only chance to capture them. Capped at 50 years back.
+    STATE.seasonHistory.push({ year: STATE.seasonYear, rows: seasonWinnersSnapshot() });
+    if (STATE.seasonHistory.length > 50) STATE.seasonHistory = STATE.seasonHistory.slice(-50);
 
     STATE.currentRoster = fieldOut(roster);
     // Sequential rank, same convention DATA.backgroundPool ships with —
@@ -1561,7 +1613,7 @@
   // their own section; `major: true` just italicizes the label so they
   // still read as different from a Championship Series week at a glance.
   NAV.push({ group: 'Schedule', items: DATA.tournaments.map(t => ({ key: 'lb-' + t.key, label: t.name, major: t.group !== 'champ' })) });
-  NAV.push({ group: 'Reference', items: [{ key: 'reference', label: 'Depth Pool' }] });
+  NAV.push({ group: 'Reference', items: [{ key: 'reference', label: 'Depth Pool' }, { key: 'pastresults', label: 'Past Results' }] });
   NAV.push({ group: 'Data', items: [{ key: 'data', label: 'Save / Load' }] });
 
   const sidebarEl = document.getElementById('sidebar');
@@ -1623,6 +1675,7 @@
     else if (currentView === 'challengertournament') renderChallengerTournament();
     else if (currentView === 'challengerstandings') renderChallengerStandings();
     else if (currentView === 'reference') renderReference();
+    else if (currentView === 'pastresults') renderPastResults();
     else if (currentView === 'data') renderData();
     showOnly(currentView);
   }
@@ -2045,7 +2098,7 @@
         <div><strong>Promoted &mdash; Last Chance Series (${s.promotedFromLastChance.length})</strong>${list(s.promotedFromLastChance)}</div>
         <div><strong>Promoted &mdash; Challenger Series (${s.promotedFromChallenger.length})</strong>${list(s.promotedFromChallenger)}</div>
         <div><strong>Relegated off the roster (${s.relegated.length})</strong>${list(s.relegated)}</div>
-        <div><strong>Aged out at 50+ (${s.agedOut.length})</strong><p class="view-note" style="margin:0 0 6px;">Ages here are a simulation-only mechanic, randomly assigned per name for this relegation rule &mdash; not real ages.</p>${list(s.agedOut)}</div>
+        <div><strong>Aged out at 50+ (${s.agedOut.length})</strong><p class="view-note" style="margin:0 0 6px;">Real, public-record birth years where known; a disclosed simulation-only estimate otherwise (marked with *).</p>${list(s.agedOut)}</div>
         <div><strong>New prospects joining the pool (${s.freshProspects.length})</strong>${list(s.freshProspects)}</div>
       </div>
     </div>`;
@@ -2266,7 +2319,7 @@
       const box = document.createElement('div');
       box.className = 'playoff-box';
       box.innerHTML = `<h3>&#127942; Season ${STATE.seasonNumber} (${STATE.seasonYear}) complete</h3>
-        <p class="view-note">Advancing rolls the calendar to <strong>${STATE.seasonYear + 1}</strong>: ${preview.relegated.length} relegated off the Championship roster, ${preview.promotedFromLastChance.length} promoted via the Last Chance Series Final, ${preview.promotedFromChallenger.length} promoted from the Challenger Series standings, plus a fresh batch of prospects joining the depth pool. Any player turning 50 or older in ${STATE.seasonYear + 1} is relegated out of the system entirely, regardless of where they finished &mdash; using a randomly assigned, simulation-only age for this rule, not a real one.</p>`;
+        <p class="view-note">Advancing rolls the calendar to <strong>${STATE.seasonYear + 1}</strong>: ${preview.relegated.length} relegated off the Championship roster, ${preview.promotedFromLastChance.length} promoted via the Last Chance Series Final, ${preview.promotedFromChallenger.length} promoted from the Challenger Series standings, plus a fresh batch of prospects joining the depth pool. Any player turning 50 or older in ${STATE.seasonYear + 1} is relegated out of the system entirely, regardless of where they finished &mdash; using their real, public-record age where it's known, or a disclosed simulation-only estimate otherwise.</p>`;
       const btn = document.createElement('button');
       btn.className = 'btn primary';
       btn.textContent = `Advance to Season ${STATE.seasonYear + 1}`;
@@ -2847,6 +2900,52 @@
       el.querySelector('#resample-count').textContent = `${size}-man sample`;
       drawPool();
     });
+  }
+
+  // ---------------- past results ----------------
+  // The winner of every event simulated, filterable by year — the current
+  // in-progress season (as far as it's gotten) plus every season archived
+  // in STATE.seasonHistory, going back as far as this save file's history
+  // goes (up to 50 years, per advanceToNextSeason's cap).
+  function renderPastResults() {
+    const el = viewContainer('pastresults');
+    const years = pastResultsYears();
+    let selectedYear = years[0];
+    el.innerHTML = `<div class="view-head"><h2>Past Results</h2><div class="meta" id="pastresults-meta"></div></div>
+      <p class="view-note">The winner of every Championship Series event, major, THE PLAYERS, TOUR Championship Knockout, Challenger Series event, and Last Chance Series stage — filterable by season. The current season only shows winners for events that have actually been decided so far.</p>
+      <div class="picker-row"><label>Season</label><div id="pastresults-picker"></div></div>
+      <div id="pastresults-body"></div>`;
+    const pickerHost = el.querySelector('#pastresults-picker');
+    const bodyHost = el.querySelector('#pastresults-body');
+    const metaHost = el.querySelector('#pastresults-meta');
+    pickerHost.appendChild(createDropdown(
+      [{ items: years.map(y => ({ value: String(y), label: y === STATE.seasonYear ? `${y} (current)` : String(y) })) }],
+      String(selectedYear), 'choose a season',
+      (value) => { selectedYear = parseInt(value, 10); draw(); }
+    ));
+    function draw() {
+      const rows = pastResultsRowsFor(selectedYear);
+      metaHost.textContent = `${rows.length} result${rows.length === 1 ? '' : 's'}`;
+      if (!rows.length) {
+        bodyHost.innerHTML = selectedYear === STATE.seasonYear
+          ? '<p class="view-note">No events have been completed yet this season.</p>'
+          : '<p class="view-note">No results archived for this season.</p>';
+        return;
+      }
+      const wrap = document.createElement('div');
+      wrap.className = 'table-wrap';
+      wrap.innerHTML = `<table><thead><tr><th>Event</th><th>Category</th><th>Dates</th><th>Winner</th><th>Ctry</th></tr></thead><tbody></tbody></table>`;
+      const tbody = wrap.querySelector('tbody');
+      rows.forEach(r => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td class="name">${r.name}</td><td>${r.category}</td><td class="mono" style="font-size:0.78rem;color:var(--ink-faint);">${r.dates}</td><td class="name clickable">${r.winner}</td><td class="ctry">${r.country || ''}</td>`;
+        tr.querySelector('.clickable').addEventListener('click', () => showPlayerModal(r.winner));
+        tbody.appendChild(tr);
+      });
+      bodyHost.innerHTML = '';
+      bodyHost.appendChild(wrap);
+    }
+    draw();
   }
 
   // ---------------- data (save / load) ----------------

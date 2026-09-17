@@ -155,4 +155,55 @@ const NAME_BANK = {
   clubProLast: ["Beringer","Whitlock","McAllister","Osterman","Pruett","Vance","Kessler","Radford","Stallings","Tibbetts","Crenwell","Hopwell","Sanderling","Odum","Brackett","Fenwick","Larrabee","Combs","Ostrander","Vollmer"]
 };
 
-module.exports = { TOP_120, RANK_121_200, REAL_EXTRA, PAST_CHAMPIONS, NAME_BANK };
+// Real, public-record birth years for real, named professional golfers, used
+// by the client's age-based relegation rule (any player turning 50+ in a
+// given season year is pulled out of the system). Sourced from general
+// public-record knowledge (tour bios, Wikipedia) rather than a live
+// database, so treat it as best-effort — not every name is included. A
+// player is only listed here when there's real confidence in the year;
+// anyone genuinely unlisted (mostly lower-profile Korn Ferry/mini-tour
+// names further down REAL_EXTRA) falls back to the client's disclosed
+// synthetic age system instead of a guessed "real" year, since guessing
+// would be the exact fabrication-for-a-real-person problem this table
+// exists to avoid.
+const REAL_BIRTH_YEARS = {
+  "Scottie Scheffler": 1996, "Rory McIlroy": 1989, "Cameron Young": 1996, "Matt Fitzpatrick": 1994, "Wyndham Clark": 1993,
+  "Russell Henley": 1989, "Tommy Fleetwood": 1991, "Chris Gotterup": 1999, "Sam Burns": 1996, "Collin Morikawa": 1997,
+  "Xander Schauffele": 1993, "Jon Rahm": 1994, "Si Woo Kim": 1995, "Justin Rose": 1980, "Viktor Hovland": 1997,
+  "J.J. Spaun": 1990, "Ludvig Åberg": 2001, "Robert MacIntyre": 1996, "Aaron Rai": 1994, "Alex Noren": 1980,
+  "Ben Griffin": 1995, "Justin Thomas": 1993, "Tyrrell Hatton": 1991, "Hideki Matsuyama": 1992, "Ryan Fox": 1984,
+  "Patrick Cantlay": 1992, "Tom Kim": 2002, "Min Woo Lee": 1998, "Sepp Straka": 1993, "Akshay Bhatia": 2002,
+  "Patrick Reed": 1990, "Bryson DeChambeau": 1993, "J.T. Poston": 1993, "Kurt Kitayama": 1993, "Harris English": 1989,
+  "Nicolai Højgaard": 2000, "Gary Woodland": 1984, "Joaquín Niemann": 1998, "Maverick McNealy": 1994, "Bud Cauley": 1990,
+  "Alex Smalley": 1996, "Rickie Fowler": 1988, "Keegan Bradley": 1986, "Jake Knapp": 1994, "Lucas Herbert": 1995,
+  "Adam Scott": 1980, "Corey Conners": 1991, "Shane Lowry": 1987, "Jordan Spieth": 1993, "Nico Echavarria": 1994,
+  "Sungjae Im": 1996, "Sam Stevens": 1996, "Daniel Berger": 1993, "Matt Wallace": 1991, "Brian Harman": 1985,
+  "Michael Kim": 1992, "Ryo Hisatsune": 2001, "Eugenio Chacarra": 2000, "Jackson Koivun": 2004, "Jason Day": 1987,
+  "Pierceson Coody": 2000, "Alex Fitzpatrick": 1997, "Matt McCarty": 1994, "Jordan Smith": 1992, "Rasmus Højgaard": 2000,
+  "Keith Mitchell": 1992, "Andrew Novak": 1994, "Harry Hall": 1997, "Eric Cole": 1991, "David Puig": 2001,
+  "Max Homa": 1990, "Nick Taylor": 1988, "Sami Välimäki": 1998, "Steven Fisk": 1995, "Sahith Theegala": 1997,
+  "Matti Schmid": 1996, "Thomas Detry": 1994, "Max Greyserman": 1993, "Denny McCarthy": 1992, "Aldrich Potgieter": 2005,
+  "Keita Nakajima": 2000, "Beau Hossler": 1996, "Jayden Schaper": 2001, "Ricky Castillo": 2001, "Taylor Pendrith": 1993,
+  "Christiaan Bezuidenhout": 1995, "Kevin Yu": 1998, "Patrick Rodgers": 1992, "Emiliano Grillo": 1993, "Andrew Putnam": 1990,
+  "Ben Kohles": 1989, "Rico Hoey": 1996, "Lucas Glover": 1979, "Stephan Jaeger": 1991, "Davis Thompson": 1998,
+  "Chris Kirk": 1986, "Doc Redman": 1997, "Austin Smotherman": 1994, "Kevin Roy": 1988, "Max McGreevy": 1996,
+  "Brooks Koepka": 1990, "Shaun Norris": 1982,
+
+  "Andy Sullivan": 1991, "Davis Riley": 1997, "Garrick Higgo": 1999, "Haotong Li": 1995, "David Lipsky": 1988,
+  "Tom Hoge": 1990, "Brandt Snedeker": 1980, "Cameron Smith": 1993, "Scott Vincent": 1992, "Tony Finau": 1988,
+  "Zac Blair": 1990, "Tom McKibbin": 2002, "Mark Hubbard": 1988, "Richard Sterne": 1979, "Sergio García": 1980,
+  "Laurie Canter": 1990, "Doug Ghim": 1996, "Mackenzie Hughes": 1990, "Billy Horschel": 1986, "Brian Campbell": 1993,
+  "Victor Perez": 1994, "Marcus Armitage": 1988, "Taylor Moore": 1993, "Bernd Wiesberger": 1985, "Thorbjørn Olesen": 1990,
+  "Kazuki Higa": 1997, "Carlos Ortiz": 1991, "Joakim Lagergren": 1991, "Takumi Kanaya": 1998, "Jhonattan Vegas": 1986,
+  "Kristoffer Ventura": 1995, "Thriston Lawrence": 1997, "Austin Eckroat": 1997, "Dean Burmester": 1992, "Matt Kuchar": 1978,
+  "Jorge Campillo": 1983, "Abraham Ancer": 1991, "Séamus Power": 1986, "Adam Schenk": 1991, "Ewen Ferguson": 1996,
+
+  "Wu Ashun": 1990, "Anirban Lahiri": 1987, "Cameron Champ": 1996, "Peter Malnati": 1987, "Will Zalatoris": 1996,
+  "Nick Dunlap": 2004, "Guido Migliozzi": 1997, "Cameron Davis": 1994, "Cameron Percy": 1979, "David Hearn": 1983,
+  "Hunter Mahan": 1982, "Matt Jones": 1980, "Bae Sang-moon": 1988, "Kramer Hickok": 1992, "Mito Pereira": 1998,
+  "Matthias Schwab": 1994, "Robert Streb": 1987, "Brendon Todd": 1985, "John Huh": 1990, "Adam Long": 1988,
+  "Lanto Griffin": 1990, "Peter Uihlein": 1990, "Joseph Bramlett": 1988, "Nick Hardy": 1994, "Henrik Norlander": 1987,
+  "Adam Svensson": 1993, "Tyler Duncan": 1988, "David Lingmerth": 1985,
+};
+
+module.exports = { TOP_120, RANK_121_200, REAL_EXTRA, PAST_CHAMPIONS, NAME_BANK, REAL_BIRTH_YEARS };

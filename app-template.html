@@ -247,7 +247,19 @@
     if (saved) STATE = Object.assign(defaultState(), JSON.parse(saved));
   } catch (e) {}
   function saveState() {
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(STATE)); } catch (e) {}
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(STATE));
+    } catch (e) {
+      // Most likely a quota overflow from a long seasonHistory archive (full
+      // past leaderboards for up to 50 seasons adds up) — drop the oldest
+      // half of it and retry once, rather than silently losing this save
+      // (and every save after it) entirely. Current play always wins over
+      // old archives.
+      if (STATE.seasonHistory && STATE.seasonHistory.length > 1) {
+        STATE.seasonHistory = STATE.seasonHistory.slice(Math.ceil(STATE.seasonHistory.length / 2));
+        try { localStorage.setItem(STORAGE_KEY, JSON.stringify(STATE)); } catch (e2) {}
+      }
+    }
   }
   // Migrate from the old one-refresh-only tracking (a plain array of
   // already-refreshed keys) into the new per-event count, so an event that
@@ -785,6 +797,76 @@
     const entry = STATE.seasonHistory.find(h => h.year === year);
     return entry ? entry.rows : [];
   }
+  // A frozen, read-only leaderboard for one stroke-play event (everything
+  // except the match-play Group Stage/Knockout) — the same shape
+  // tournamentStandingsRows already computes, flattened into plain rows
+  // (missed-cut players included, `total: null`) so it survives being
+  // stored as plain JSON in STATE.seasonHistory across a season transition.
+  function buildTournamentSnapshot(tKey) {
+    const t = byKey[tKey];
+    const std = tournamentStandingsRows(tKey);
+    if (!std) return null;
+    const madeCutRows = std.ranked.map(r => ({ name: r.p.name, country: r.p.country, total: r.rawTotal, posLabel: r.posLabel, champPts: r.champPts, wrPts: r.wrPts, missed: false }));
+    const missedRows = (std.cut ? Array.from(std.cut.missedCut) : []).map(name => ({ name, country: NAME_INDEX.get(name) || '', total: null, posLabel: 'MC', champPts: 0, wrPts: 0, missed: true }));
+    return { key: tKey, name: t.name, dates: t.dates, cutSize: t.cutSize, fieldSize: t.field.length, rows: [...madeCutRows, ...missedRows] };
+  }
+  // Every stroke-play event actually played this season, keyed by
+  // tournament key — captured once, right before a season transition wipes
+  // STATE.scores for the new season.
+  function buildAllTournamentSnapshots() {
+    const out = {};
+    DATA.tournaments.forEach(t => {
+      if (MATCH_PLAY_KEYS.has(t.key)) return; // not stroke play — no single leaderboard to freeze
+      if (!STATE.scores[t.key]) return; // never played
+      const snap = buildTournamentSnapshot(t.key);
+      if (snap) out[t.key] = snap;
+    });
+    return out;
+  }
+  // Final Championship Series / Challenger Series standings for the season
+  // about to end — same row shape renderChampPoints/renderChallengerStandings
+  // build live, so the frozen archive can go straight into standingsTable.
+  function buildChampStandingsSnapshot() {
+    const { champ } = computeStandings();
+    const { wins, top10, missedCuts } = computeCareerStats();
+    const rows = Object.entries(champ)
+      .filter(([, pts]) => pts > 0)
+      .map(([name, pts]) => ({ name, country: NAME_INDEX.get(name), points: pts, wins: wins[name] || 0, top10: top10[name] || 0, missedCuts: missedCuts[name] || 0 }));
+    const seen = new Set(rows.map(r => r.name));
+    STATE.currentRoster.forEach(p => {
+      if (seen.has(p.name)) return;
+      rows.push({ name: p.name, country: p.country, points: 0, wins: wins[p.name] || 0, top10: top10[p.name] || 0, missedCuts: missedCuts[p.name] || 0 });
+      seen.add(p.name);
+    });
+    rows.sort((a, b) => b.points - a.points || compareBySurname(a.name, b.name));
+    return rows;
+  }
+  function buildChallengerStandingsSnapshot() {
+    const { challenger } = computeStandings();
+    const { wins, top10 } = computeChallengerCareerStats();
+    return Object.entries(challenger)
+      .filter(([, pts]) => pts > 0)
+      .map(([name, pts]) => ({ name, country: NAME_INDEX.get(name), points: pts, wins: wins[name] || 0, top10: top10[name] || 0 }))
+      .sort((a, b) => b.points - a.points);
+  }
+  // Shared "Season" dropdown used on any tab that can show a past year's
+  // frozen data alongside the live current season — the leaderboard tabs,
+  // Championship Series Points, and Challenger Series Standings.
+  const seasonPickerSelection = {};
+  function renderSeasonPicker(container, years, selectedYear, onChange) {
+    container.innerHTML = '';
+    container.className = 'picker-row';
+    if (years.length <= 1) return;
+    const label = document.createElement('label');
+    label.textContent = 'Season';
+    container.appendChild(label);
+    const host = document.createElement('div');
+    container.appendChild(host);
+    host.appendChild(createDropdown(
+      [{ items: years.map(y => ({ value: String(y), label: y === STATE.seasonYear ? `${y} (current)` : String(y) })) }],
+      String(selectedYear), 'season', onChange
+    ));
+  }
 
   // ---------------- season transition ----------------
   // Promotion/relegation, before any age check: the top 90 of the current
@@ -908,9 +990,17 @@
       agedOut: agedOut.map(p => `${p.name} (${getPlayerAge(p.name, newSeasonYear)}${isRealBirthYear(p.name) ? '' : '*'})`),
     };
 
-    // Archive this season's event winners before scores/results reset below
-    // — this is the only chance to capture them. Capped at 50 years back.
-    STATE.seasonHistory.push({ year: STATE.seasonYear, rows: seasonWinnersSnapshot() });
+    // Archive this season's event winners, full tournament leaderboards, and
+    // final Championship/Challenger standings before scores/results reset
+    // below — this is the only chance to capture any of it. Capped at 50
+    // years back.
+    STATE.seasonHistory.push({
+      year: STATE.seasonYear,
+      rows: seasonWinnersSnapshot(),
+      tournaments: buildAllTournamentSnapshots(),
+      champStandings: buildChampStandingsSnapshot(),
+      challengerStandings: buildChallengerStandingsSnapshot(),
+    });
     if (STATE.seasonHistory.length > 50) STATE.seasonHistory = STATE.seasonHistory.slice(-50);
 
     STATE.currentRoster = fieldOut(roster);
@@ -2103,12 +2193,57 @@
       </div>
     </div>`;
   }
+  // A frozen leaderboard from a past season — no editing, no lock/playoff
+  // controls, just the final result, plus the same Season picker so it's
+  // easy to jump back to the live current-season view.
+  function renderArchivedLeaderboard(el, tKey, year, allYears) {
+    const t = byKey[tKey];
+    const entry = STATE.seasonHistory.find(h => h.year === year);
+    const snap = entry && entry.tournaments[tKey];
+    el.innerHTML = `<div class="view-head"><h2>${snap ? snap.name : t.name}</h2><div class="meta">${year} season${snap ? ` &middot; field of ${snap.fieldSize}` : ''}</div></div>`;
+    const pickerHost = document.createElement('div');
+    el.appendChild(pickerHost);
+    renderSeasonPicker(pickerHost, allYears, year, (v) => {
+      seasonPickerSelection['lb-' + tKey] = parseInt(v, 10);
+      renderLeaderboard(tKey);
+    });
+    if (!snap) {
+      el.insertAdjacentHTML('beforeend', '<p class="view-note">No archived leaderboard for this event in that season (it likely wasn\'t played, e.g. before the app was first used).</p>');
+      return;
+    }
+    el.insertAdjacentHTML('beforeend', `<p class="view-note">Archived, read-only result from the ${year} season.</p>`);
+    const wrap = document.createElement('div');
+    wrap.className = 'table-wrap';
+    wrap.innerHTML = `<table><thead><tr><th>Pos.</th><th>Player</th><th>Ctry</th><th>Total</th><th>Champ. pts</th><th>WR pts</th></tr></thead><tbody></tbody></table>`;
+    const tbody = wrap.querySelector('tbody');
+    snap.rows.forEach(r => {
+      const tr = document.createElement('tr');
+      if (r.missed) tr.style.opacity = '0.55';
+      const totalCell = r.total === null ? '<span class="dash">–</span>' : fmtToPar(r.total);
+      tr.innerHTML = `<td class="rk mono">${r.posLabel}</td><td class="name clickable">${r.name}</td><td class="ctry">${r.country}</td><td class="num mono">${totalCell}</td><td class="num mono">${r.champPts.toFixed(2)}</td><td class="num mono">${r.wrPts.toFixed(4)}</td>`;
+      tr.querySelector('.clickable').addEventListener('click', () => showPlayerModal(r.name));
+      tbody.appendChild(tr);
+    });
+    el.appendChild(wrap);
+  }
   function renderLeaderboard(tKey) {
     const el = viewContainer('lb-' + tKey);
     const t = byKey[tKey];
+    const historyYears = STATE.seasonHistory.filter(h => h.tournaments && h.tournaments[tKey]).map(h => h.year).sort((a, b) => b - a);
+    const allYears = [STATE.seasonYear, ...historyYears];
+    const selectedYear = (seasonPickerSelection['lb-' + tKey] && allYears.includes(seasonPickerSelection['lb-' + tKey])) ? seasonPickerSelection['lb-' + tKey] : STATE.seasonYear;
+    if (selectedYear !== STATE.seasonYear) {
+      renderArchivedLeaderboard(el, tKey, selectedYear, allYears);
+      return;
+    }
     if (!t.field || t.field.length === 0) {
-      el.innerHTML = `<div class="view-head"><h2>${t.name}</h2><div class="meta">${t.dates}</div></div>
-        <p class="view-note">${fieldPendingNote(tKey)}</p>${tKey === 'lastchance4' ? renderSeasonRecapHtml() : ''}`;
+      el.innerHTML = `<div class="view-head"><h2>${t.name}</h2><div class="meta">${t.dates}</div></div>`;
+      if (allYears.length > 1) {
+        const pickerHost = document.createElement('div');
+        el.appendChild(pickerHost);
+        renderSeasonPicker(pickerHost, allYears, selectedYear, (v) => { seasonPickerSelection['lb-' + tKey] = parseInt(v, 10); renderLeaderboard(tKey); });
+      }
+      el.insertAdjacentHTML('beforeend', `<p class="view-note">${fieldPendingNote(tKey)}</p>${tKey === 'lastchance4' ? renderSeasonRecapHtml() : ''}`);
       return;
     }
     const cut = computeCut(tKey);
@@ -2173,6 +2308,11 @@
     const isLastChance = t.group === 'lastchance';
     const cutMeta = isLastChance ? 'no 36-hole cut — every player finishes' : `cut: top ${t.cutSize || 65} &amp; ties`;
     el.innerHTML = `<div class="view-head"><h2>${t.name}</h2><div class="meta">${t.dates}<br/>field of ${t.field.length} &middot; ${cutMeta}</div></div>`;
+    if (allYears.length > 1) {
+      const pickerHost = document.createElement('div');
+      el.appendChild(pickerHost);
+      renderSeasonPicker(pickerHost, allYears, selectedYear, (v) => { seasonPickerSelection['lb-' + tKey] = parseInt(v, 10); renderLeaderboard(tKey); });
+    }
     const controlRow = document.createElement('div');
     controlRow.className = 'lock-row';
     controlRow.style.marginBottom = '10px';
@@ -2749,8 +2889,23 @@
   function renderChampPoints() {
     const el = viewContainer('champpoints');
     let showProjected = false;
+    const historyYears = STATE.seasonHistory.filter(h => h.champStandings).map(h => h.year).sort((a, b) => b - a);
+    const allYears = [STATE.seasonYear, ...historyYears];
+    let selectedYear = (seasonPickerSelection.champpoints && allYears.includes(seasonPickerSelection.champpoints)) ? seasonPickerSelection.champpoints : STATE.seasonYear;
 
     function draw() {
+      if (selectedYear !== STATE.seasonYear) {
+        const entry = STATE.seasonHistory.find(h => h.year === selectedYear);
+        const rows = entry ? entry.champStandings : [];
+        el.innerHTML = `<div class="view-head"><h2>Championship Series Points</h2><div class="meta">${rows.length} players &middot; ${selectedYear} season (archived)</div></div>`;
+        const pickerHost = document.createElement('div');
+        el.appendChild(pickerHost);
+        renderSeasonPicker(pickerHost, allYears, selectedYear, (v) => { seasonPickerSelection.champpoints = parseInt(v, 10); selectedYear = parseInt(v, 10); draw(); });
+        el.insertAdjacentHTML('beforeend', `<p class="view-note">Final standings from the ${selectedYear} season, archived at that season's transition — read-only.</p>`);
+        if (!rows.length) { el.insertAdjacentHTML('beforeend', '<p class="view-note">No archived standings for this season.</p>'); return; }
+        standingsTable(el, rows, 90, 'Championship Series Finale cutoff — top 90 advanced', true, true);
+        return;
+      }
       const completedOnly = !showProjected;
       const { champ } = computeStandings(undefined, undefined, completedOnly);
       const { wins, top10, missedCuts } = computeCareerStats();
@@ -2782,6 +2937,11 @@
           <button class="btn${!completedOnly ? ' primary' : ''}" data-mode="projected">Include in-progress (projected)</button>
         </div>
         <p class="view-note">${modeNote} Season points from every Championship Series event, THE PLAYERS, and all four majors. Point values follow the <a href="https://en.wikipedia.org/wiki/List_of_point_distributions_of_the_FedEx_Cup" style="color:inherit;">FedEx Cup distribution</a> by tier (Signature-tier for the ${DATA.tournaments.filter(t => t.group === 'champ' && !MATCH_PLAY_KEYS.has(t.key)).length} Championship Series events, Major-tier for majors and THE PLAYERS). Entirely separate from the Challenger Series board — Challenger results never move this one. The Move column shows the shift caused by the last tournament submitted${lastKey ? ` (${byKey[lastKey].name})` : ''}. All 120 Championship roster players are listed even at 0 points. Wins, Top 10, and Missed Cuts count actual finishes from completed, locked tournaments only regardless of this filter (a resolved playoff credits one win, not a tie). The top 90 here qualify for the Championship Series Finale; the Group Stage and Knockout that follow it are match play and don't add any more points. Click a player's name for their full results so far.</p>`;
+      if (allYears.length > 1) {
+        const pickerHost = document.createElement('div');
+        el.insertBefore(pickerHost, el.children[1]);
+        renderSeasonPicker(pickerHost, allYears, selectedYear, (v) => { seasonPickerSelection.champpoints = parseInt(v, 10); selectedYear = parseInt(v, 10); draw(); });
+      }
       el.querySelectorAll('#champ-points-filter button').forEach(btn => {
         btn.addEventListener('click', () => { showProjected = btn.dataset.mode === 'projected'; draw(); });
       });
@@ -2848,6 +3008,21 @@
 
   function renderChallengerStandings() {
     const el = viewContainer('challengerstandings');
+    const historyYears = STATE.seasonHistory.filter(h => h.challengerStandings).map(h => h.year).sort((a, b) => b - a);
+    const allYears = [STATE.seasonYear, ...historyYears];
+    const selectedYear = (seasonPickerSelection.challengerstandings && allYears.includes(seasonPickerSelection.challengerstandings)) ? seasonPickerSelection.challengerstandings : STATE.seasonYear;
+    if (selectedYear !== STATE.seasonYear) {
+      const entry = STATE.seasonHistory.find(h => h.year === selectedYear);
+      const rows = entry ? entry.challengerStandings : [];
+      el.innerHTML = `<div class="view-head"><h2>Challenger Series Standings</h2><div class="meta">${rows.length} players &middot; ${selectedYear} season (archived)</div></div>`;
+      const pickerHost = document.createElement('div');
+      el.appendChild(pickerHost);
+      renderSeasonPicker(pickerHost, allYears, selectedYear, (v) => { seasonPickerSelection.challengerstandings = parseInt(v, 10); renderChallengerStandings(); });
+      el.insertAdjacentHTML('beforeend', `<p class="view-note">Final Challenger Series standings from the ${selectedYear} season, archived at that season's transition — read-only.</p>`);
+      if (!rows.length) { el.insertAdjacentHTML('beforeend', '<p class="view-note">No archived standings for this season.</p>'); return; }
+      standingsTable(el, rows, null, null, true);
+      return;
+    }
     const { challenger } = computeStandings();
     const { wins, top10 } = computeChallengerCareerStats();
     const rows = Object.entries(challenger)
@@ -2858,7 +3033,12 @@
     attachMovement(rows, lastChallengerKey ? computeStandings(lastChallengerKey).challenger : null, ([, pts]) => pts > 0);
     el.innerHTML = `<div class="view-head"><h2>Challenger Series Standings</h2><div class="meta">${rows.length} players on the board</div></div>
       <p class="view-note">Season points from the auto-run Challenger Series companion events, at the same per-tournament value as the real Championship Series (Signature-tier FedEx Cup points) — but this board and that one never affect each other. The Move column shows the shift caused by the last Challenger Series event${lastChallengerKey ? ` (triggered by ${byKey[lastChallengerKey].name})` : ''}. Wins and Top 10 tally actual finishes across every Challenger Series event run so far. Click a player's name for their full results so far.</p>`;
-    if (!rows.length) { el.innerHTML += '<p class="view-note">No Challenger Series events have run yet.</p>'; return; }
+    if (allYears.length > 1) {
+      const pickerHost = document.createElement('div');
+      el.insertBefore(pickerHost, el.children[1]);
+      renderSeasonPicker(pickerHost, allYears, selectedYear, (v) => { seasonPickerSelection.challengerstandings = parseInt(v, 10); renderChallengerStandings(); });
+    }
+    if (!rows.length) { el.insertAdjacentHTML('beforeend', '<p class="view-note">No Challenger Series events have run yet.</p>'); return; }
     standingsTable(el, rows, null, null, true);
   }
 
@@ -2907,12 +3087,34 @@
   // in-progress season (as far as it's gotten) plus every season archived
   // in STATE.seasonHistory, going back as far as this save file's history
   // goes (up to 50 years, per advanceToNextSeason's cap).
+  // Jumps from a Past Results row to that event's own tab, pre-selecting
+  // the right season there. Challenger Series events don't have an
+  // individual per-event tab, so they route to the season's Challenger
+  // Series Standings instead; the match-play Knockout has no archived
+  // per-season bracket view yet, so a past season's row there isn't
+  // navigable (its winner's name still is, via the player modal).
+  function navigateToPastResult(r, year) {
+    if (r.key.indexOf('challenger-') === 0) {
+      if (year === STATE.seasonYear) delete seasonPickerSelection.challengerstandings;
+      else seasonPickerSelection.challengerstandings = year;
+      selectView('challengerstandings');
+      return;
+    }
+    if (r.key === 'matchko') {
+      if (year === STATE.seasonYear) selectView('lb-matchko');
+      return;
+    }
+    const navKey = 'lb-' + r.key;
+    if (year === STATE.seasonYear) delete seasonPickerSelection[navKey];
+    else seasonPickerSelection[navKey] = year;
+    selectView(navKey);
+  }
   function renderPastResults() {
     const el = viewContainer('pastresults');
     const years = pastResultsYears();
     let selectedYear = years[0];
     el.innerHTML = `<div class="view-head"><h2>Past Results</h2><div class="meta" id="pastresults-meta"></div></div>
-      <p class="view-note">The winner of every Championship Series event, major, THE PLAYERS, TOUR Championship Knockout, Challenger Series event, and Last Chance Series stage — filterable by season. The current season only shows winners for events that have actually been decided so far.</p>
+      <p class="view-note">The winner of every Championship Series event, major, THE PLAYERS, TOUR Championship Knockout, Challenger Series event, and Last Chance Series stage — filterable by season. The current season only shows winners for events that have actually been decided so far. Click an event's name to open its full leaderboard for that season; click a winner's name for their player card.</p>
       <div class="picker-row"><label>Season</label><div id="pastresults-picker"></div></div>
       <div id="pastresults-body"></div>`;
     const pickerHost = el.querySelector('#pastresults-picker');
@@ -2938,8 +3140,10 @@
       const tbody = wrap.querySelector('tbody');
       rows.forEach(r => {
         const tr = document.createElement('tr');
-        tr.innerHTML = `<td class="name">${r.name}</td><td>${r.category}</td><td class="mono" style="font-size:0.78rem;color:var(--ink-faint);">${r.dates}</td><td class="name clickable">${r.winner}</td><td class="ctry">${r.country || ''}</td>`;
-        tr.querySelector('.clickable').addEventListener('click', () => showPlayerModal(r.winner));
+        const navigable = !(r.key === 'matchko' && selectedYear !== STATE.seasonYear);
+        tr.innerHTML = `<td class="name${navigable ? ' clickable' : ''}" data-role="event">${r.name}</td><td>${r.category}</td><td class="mono" style="font-size:0.78rem;color:var(--ink-faint);">${r.dates}</td><td class="name clickable" data-role="winner">${r.winner}</td><td class="ctry">${r.country || ''}</td>`;
+        if (navigable) tr.querySelector('[data-role="event"]').addEventListener('click', () => navigateToPastResult(r, selectedYear));
+        tr.querySelector('[data-role="winner"]').addEventListener('click', () => showPlayerModal(r.winner));
         tbody.appendChild(tr);
       });
       bodyHost.innerHTML = '';

@@ -782,7 +782,7 @@
     STATE.challengerResults.forEach(ev => {
       const winnerResult = ev.result.find(r => r.rank === 1);
       if (!winnerResult) return;
-      rows.push({ key: 'challenger-' + ev.triggerKey, name: ev.triggerName, dates: ev.dates, category: 'Challenger Series', winner: winnerResult.name, country: NAME_INDEX.get(winnerResult.name) || '' });
+      rows.push({ key: 'challenger-' + ev.triggerKey, name: ev.name || ev.triggerName, dates: ev.dates, category: 'Challenger Series', winner: winnerResult.name, country: NAME_INDEX.get(winnerResult.name) || '' });
     });
     return rows;
   }
@@ -1518,6 +1518,31 @@
       return ea - eb;
     });
   }
+  // A Challenger Series event used to just borrow its triggering
+  // Championship Series event's own name (e.g. both boards would show
+  // "AT&T Pebble Beach Pro-Am"), which made the two series hard to tell
+  // apart at a glance in Past Results and the player results modal. Every
+  // Challenger Series event now gets its own made-up name instead — the
+  // real trigger is still shown alongside it (a "Triggered by" chip on the
+  // Challenger Series Tournament tab, a "wk:" note in the player modal) for
+  // anyone who wants that context.
+  function challengerEventNamePools() {
+    return {
+      place: ['Ironwood', 'Red Clay', 'Silver Creek', 'Cedar Ridge', 'Blue Harbor', 'Copper Basin', 'Stonebridge', 'Whispering Pines', 'Amber Valley', 'Twin Oaks', 'Falcon Hills', 'Brookstone', 'Northgate', 'Sundown', 'Black Mesa', 'Widows Peak', 'Hollow Creek', 'Palmetto Bend', 'Granite Bay', 'Cottonwood', 'Highland Reach', 'Salt Fork', 'Windmere', 'Bearclaw', 'Longview', 'Prairie Hollow', 'Foxglove', 'Tanglewood', 'Marlin Cove', 'Driftwood', 'Cinder Ridge', 'Half Moon Bay', 'Quarry Hill', 'Sagebrush', 'Millstone', 'Eagleview', 'Pinehaven', 'Rustlers Gulch', 'Thistledown', 'Cobalt Point'],
+      suffix: ['Classic', 'Open', 'Challenge', 'Invitational', 'Championship', 'Showcase', 'Shootout', 'Cup', 'Series', 'Tour Stop'],
+    };
+  }
+  function generateChallengerEventName(usedNames) {
+    const pools = challengerEventNamePools();
+    let name, tries = 0;
+    do {
+      const place = pools.place[Math.floor(Math.random() * pools.place.length)];
+      const suffix = pools.suffix[Math.floor(Math.random() * pools.suffix.length)];
+      name = `${place} ${suffix}`;
+      tries++;
+    } while (usedNames.has(name) && tries < 50);
+    return name;
+  }
   // Randomised companion event drawn from the open depth pool, weighted
   // toward the top of the (increasingly Challenger-standings-blended) pool.
   // Any previous winner this season is guaranteed a spot rather than just
@@ -1549,7 +1574,8 @@
       const rank = i + 1;
       return { name: p.name, country: p.country, rank, owgrPts: pointsForRank(owgrTable, rank) * 0.5, challengerPts: pointsForRank(champTable, rank) };
     });
-    return { triggerKey: trigger.key, triggerName: trigger.name, dates: trigger.dates, fieldSize: field.length, result };
+    const usedNames = new Set(STATE.challengerResults.map(ev => ev.name));
+    return { name: generateChallengerEventName(usedNames), triggerKey: trigger.key, triggerName: trigger.name, dates: trigger.dates, fieldSize: field.length, result };
   }
   // The Challenger Series' own finale, triggered alongside the Championship
   // Series Finale: field is exactly the top 90 on the CURRENT Challenger
@@ -1568,7 +1594,8 @@
       const rank = i + 1;
       return { name: p.name, country: p.country, rank, owgrPts: pointsForRank(owgrTable, rank) * 0.5, challengerPts: pointsForRank(champTable, rank) };
     });
-    return { triggerKey: trigger.key, triggerName: trigger.name, dates: trigger.dates, fieldSize: field.length, result };
+    const usedNames = new Set(STATE.challengerResults.map(ev => ev.name));
+    return { name: generateChallengerEventName(usedNames), triggerKey: trigger.key, triggerName: trigger.name, dates: trigger.dates, fieldSize: field.length, result };
   }
 
   // Majors and THE PLAYERS are group 'major'/'players', never 'champ' — this
@@ -2821,7 +2848,7 @@
     });
     const challengerRows = STATE.challengerResults.map(ev => {
       const r = ev.result.find(x => x.name === name);
-      return r ? { key: ev.triggerKey, name: ev.triggerName, dates: ev.dates, rank: r.rank, challengerPts: r.challengerPts, wrPts: r.owgrPts } : null;
+      return r ? { key: ev.triggerKey, name: ev.name || ev.triggerName, triggerName: ev.triggerName, dates: ev.dates, rank: r.rank, challengerPts: r.challengerPts, wrPts: r.owgrPts } : null;
     }).filter(Boolean);
     return { tournamentRows, challengerRows };
   }
@@ -2868,11 +2895,12 @@
       box.insertAdjacentHTML('beforeend', '<h3>Challenger Series</h3>');
       const wrap = document.createElement('div');
       wrap.className = 'table-wrap';
-      wrap.innerHTML = `<table><thead><tr><th>Event (week)</th><th>Pos</th><th>Challenger pts</th><th>WR pts</th></tr></thead><tbody></tbody></table>`;
+      wrap.innerHTML = `<table><thead><tr><th>Event</th><th>Pos</th><th>Challenger pts</th><th>WR pts</th></tr></thead><tbody></tbody></table>`;
       const tbody = wrap.querySelector('tbody');
       challengerRows.forEach(r => {
         const tr = document.createElement('tr');
-        tr.innerHTML = `<td class="name">${r.name}</td><td class="rk mono">${r.rank}</td><td class="num mono">${r.challengerPts.toFixed(2)}</td><td class="num mono">${r.wrPts.toFixed(4)}</td>`;
+        const weekNote = r.triggerName ? `<div class="mono" style="font-size:0.7rem;color:var(--ink-faint);">wk: ${r.triggerName}</div>` : '';
+        tr.innerHTML = `<td class="name">${r.name}${weekNote}</td><td class="rk mono">${r.rank}</td><td class="num mono">${r.challengerPts.toFixed(2)}</td><td class="num mono">${r.wrPts.toFixed(4)}</td>`;
         tbody.appendChild(tr);
       });
       box.appendChild(wrap);
@@ -2991,6 +3019,7 @@
       const canRefresh = canRefreshChallengerEvent(ev.triggerKey);
       const refreshesUsed = challengerRefreshesUsed(ev.triggerKey);
       const isFinale = ev.triggerKey === 'finale';
+      box.insertAdjacentHTML('beforeend', `<h3 style="margin-bottom:8px;">${ev.name || ev.triggerName}</h3>`);
       const chips = document.createElement('div');
       chips.className = 'chips';
       chips.style.marginBottom = '10px';

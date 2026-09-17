@@ -829,8 +829,12 @@
   function buildChampStandingsSnapshot() {
     const { champ } = computeStandings();
     const { wins, top10, missedCuts } = computeCareerStats();
+    // Same roster-only restriction as the live board (see renderChampPoints)
+    // — a major/THE PLAYERS finisher outside the 120-man roster still shapes
+    // the points curve but never appears on the archived standings either.
+    const rosterNames = new Set(STATE.currentRoster.map(p => p.name));
     const rows = Object.entries(champ)
-      .filter(([, pts]) => pts > 0)
+      .filter(([name, pts]) => pts > 0 && rosterNames.has(name))
       .map(([name, pts]) => ({ name, country: NAME_INDEX.get(name), points: pts, wins: wins[name] || 0, top10: top10[name] || 0, missedCuts: missedCuts[name] || 0 }));
     const seen = new Set(rows.map(r => r.name));
     STATE.currentRoster.forEach(p => {
@@ -2909,8 +2913,17 @@
       const completedOnly = !showProjected;
       const { champ } = computeStandings(undefined, undefined, completedOnly);
       const { wins, top10, missedCuts } = computeCareerStats();
+      // Majors and THE PLAYERS field plenty of players who aren't part of
+      // the 120-man Championship roster — past-champion exemptions, PGA
+      // Championship club pros, and (for the majors' random fill) depth-pool
+      // names. Their real finish still shapes the points curve everyone
+      // below them earns from (a roster player finishing 2nd behind one of
+      // them still only earns 2nd-place points, never bumped up to 1st) —
+      // they just never appear on this board themselves, which stays a
+      // strict 120 regardless of how a major's field spilled beyond it.
+      const rosterNames = new Set(STATE.currentRoster.map(p => p.name));
       const rows = Object.entries(champ)
-        .filter(([, pts]) => pts > 0)
+        .filter(([name, pts]) => pts > 0 && rosterNames.has(name))
         .map(([name, pts]) => ({ name, country: NAME_INDEX.get(name), points: pts, wins: wins[name] || 0, top10: top10[name] || 0, missedCuts: missedCuts[name] || 0 }));
       // All 120 qualified Championship roster players belong on this board
       // even before they've earned a point or made a cut — union in
@@ -2926,7 +2939,7 @@
       rows.sort((a, b) => b.points - a.points || compareBySurname(a.name, b.name));
       const lastKey = lastCompletedTournamentKey();
       const prevChamp = lastKey ? computeStandings(lastKey, undefined, completedOnly).champ : null;
-      attachMovement(rows, prevChamp, ([, pts]) => pts > 0);
+      attachMovement(rows, prevChamp, ([name, pts]) => pts > 0 && rosterNames.has(name));
       rows.forEach(r => { if (r.points === 0) r.movement = null; }); // never scored -> nothing to have "moved" from
       const modeNote = completedOnly
         ? 'Showing only points from tournaments that are complete and locked — an event still in progress doesn\'t move this board yet.'
